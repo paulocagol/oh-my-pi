@@ -6,6 +6,7 @@ import {
 	CODEIRO_MANIFEST_FILENAME,
 	type CodeiroInstall,
 	type CodeiroUpdateDeps,
+	ensureNativeAddonDirectoryChain,
 	loadCodeiroInstall,
 	parseCodeiroManifest,
 	parsePatchSeries,
@@ -272,6 +273,21 @@ describe("validateNativeArchiveListing", () => {
 			expect(() => validateNativeArchiveListing([entry])).toThrow(/escapes package root/);
 		},
 	);
+});
+
+describe("ensureNativeAddonDirectoryChain", () => {
+	it("fails closed when an ancestor is a symlink", async () => {
+		const dir = await makeTempDir();
+		const sourceRoot = path.join(dir, "source");
+		const outside = path.join(dir, "outside");
+		await fs.mkdir(sourceRoot);
+		await fs.mkdir(outside);
+		await fs.symlink(outside, path.join(sourceRoot, "packages"));
+
+		await expect(
+			ensureNativeAddonDirectoryChain(sourceRoot, path.join(sourceRoot, "packages", "natives", "native")),
+		).rejects.toThrow(/not a real directory/);
+	});
 });
 
 describe("replaceNativeAddonFile", () => {
