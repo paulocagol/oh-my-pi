@@ -27,7 +27,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          base_tag="$(git describe --tags --abbrev=0 HEAD^)"
+          series="${GITHUB_WORKSPACE}/codeiro/patches/series"
+          base_tag="$(sed -n 's/^# base: //p' "${series}")"
+          test -n "${base_tag}"
+          git rev-parse --verify "refs/tags/${base_tag}^{commit}" >/dev/null
+
           staging="$(mktemp -d)"
           trap 'rm -rf "${staging}"' EXIT
 

@@ -66,7 +66,9 @@ conteúdo nativo.
 ## Manter a série
 
 `patches/series` é uma série quilt: um patch por linha, na ordem de aplicação,
-com `#` para comentário. Os arquivos são resolvidos relativos ao `series`.
+com `#` para comentário. A primeira linha `# base: <tag>` fixa a tag upstream
+contra a qual a série deve ser validada. Os arquivos são resolvidos relativos
+ao `series`.
 
 Quando o upstream publica uma tag nova, o `omp update` falha se algum patch não
 aplicar nela. Para regenerar:
@@ -76,7 +78,8 @@ git fetch upstream --tags
 git rebase <nova-tag>            # na branch codeiro
 rm -f codeiro/patches/*.patch
 git format-patch <nova-tag>..codeiro -o codeiro/patches -- ':(exclude)codeiro'
-(cd codeiro/patches && ls *.patch > series)
+printf '# base: %s\n' '<nova-tag>' > codeiro/patches/series
+printf '%s\n' codeiro/patches/*.patch | sed 's#^codeiro/patches/##' >> codeiro/patches/series
 ```
 
 O `:(exclude)codeiro` mantém a série fora dela mesma: sem ele cada regeneração
