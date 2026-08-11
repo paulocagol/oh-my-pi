@@ -490,6 +490,45 @@ export function validateNativeArchiveListing(entries: readonly string[]): void {
 	}
 }
 
+/**
+ * Replace an extracted native addon without following a destination symlink.
+ *
+ * The temporary file and the final rename stay in the checked directory, so
+ * the destination is replaced atomically instead of being opened through a
+ * pre-existing link.
+ */
+export async function replaceNativeAddonFile(sourcePath: string, destinationPath: string): Promise<void> {
+	const parentDir = path.dirname(destinationPath);
+	const parentStat = await fs.promises.lstat(parentDir);
+	if (!parentStat.isDirectory()) {
+		throw new Error(`Native addon destination directory is not a real directory: ${parentDir}`);
+	}
+	const sourceStat = await fs.promises.lstat(sourcePath);
+	if (!sourceStat.isFile()) {
+		throw new Error(`Native addon source is not a regular file: ${sourcePath}`);
+	}
+	let destinationStat: fs.Stats | undefined;
+	try {
+		destinationStat = await fs.promises.lstat(destinationPath);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	if (destinationStat?.isSymbolicLink()) {
+		throw new Error(`Refusing to overwrite native addon symlink: ${destinationPath}`);
+	}
+	if (destinationStat && !destinationStat.isFile()) {
+		throw new Error(`Native addon destination is not a regular file: ${destinationPath}`);
+	}
+	const tempDir = await fs.promises.mkdtemp(path.join(parentDir, ".codeiro-native-install-"));
+	const tempPath = path.join(tempDir, path.basename(destinationPath));
+	try {
+		await fs.promises.copyFile(sourcePath, tempPath);
+		await fs.promises.rename(tempPath, destinationPath);
+	} finally {
+		await fs.promises.rm(tempDir, { recursive: true, force: true });
+	}
+}
+
 async function installPublishedNativeAddon(
 	sourceDir: string,
 	target: SourceBuildTarget,
@@ -550,12 +589,15 @@ async function installPublishedNativeAddon(
 			throw new Error(`Native package ${packageName}@${version} contains no addon`);
 		}
 		await fs.promises.mkdir(nativeRoot, { recursive: true });
+		if (!(await fs.promises.lstat(nativeRoot)).isDirectory()) {
+			throw new Error(`Native addon root is not a real directory: ${nativeRoot}`);
+		}
 		for (const entry of entries) {
 			const addonPath = path.join(packageDir, entry);
 			if (!(await fs.promises.lstat(addonPath)).isFile()) {
 				throw new Error(`Native archive addon is not a regular file: ${entry}`);
 			}
-			await fs.promises.copyFile(addonPath, path.join(nativeRoot, entry));
+			await replaceNativeAddonFile(addonPath, path.join(nativeRoot, entry));
 		}
 	} finally {
 		await fs.promises.rm(tempDir, { recursive: true, force: true });
