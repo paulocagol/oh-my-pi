@@ -1,0 +1,8 @@
+{
+	"distribution": "codeiro-omp",
+	"upstreamRepo": "can1357/oh-my-pi",
+	"patchRepo": "https://github.com/paulocagol/oh-my-pi.git",
+	"patchRef": "codeiro",
+	"patchSeries": "codeiro/patches/series",
+	"sourceRoot": "~/.local/share/codeiro-omp"
+}
