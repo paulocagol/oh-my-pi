@@ -48,6 +48,15 @@ Campos:
 O build roda o bootstrap do próprio repositório e reutiliza o addon nativo
 publicado para a mesma versão; precisa de `git`, `bun` 1.3.14+ e `tar` no PATH.
 
+## Segurança do addon nativo
+
+O updater valida o SHA-512 do tarball publicado, rejeita entradas absolutas ou
+com `..`, rejeita links e arquivos especiais antes da extração e só copia
+arquivos `.node` regulares do diretório `package/`. Isso protege o staging
+contra traversal do archive. A validação não substitui a confiança no upstream,
+no registry npm e na proveniência do pacote; o MVP não faz uma auditoria
+independente do conteúdo nativo.
+
 ## Manter a série
 
 `patches/series` é uma série quilt: um patch por linha, na ordem de aplicação,
