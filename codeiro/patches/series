@@ -2,3 +2,4 @@
 0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch
 0003-fix-limpar-valida-o-do-source-updater.patch
 0004-fix-bloquear-traversal-no-addon-nativo.patch
+0005-fix-proteger-destino-do-addon-nativo.patch
