@@ -467,6 +467,29 @@ function requireTools(): void {
 	}
 }
 
+/**
+ * Validate the path names emitted by `tar -t` before extraction.
+ *
+ * The native leaf is published and digest-verified, but archive contents still
+ * need a boundary check: a validly signed tarball can contain `../` entries or
+ * links that escape the temporary directory.
+ */
+export function validateNativeArchiveListing(entries: readonly string[]): void {
+	for (const entry of entries) {
+		if (entry.length === 0) continue;
+		const normalized = path.posix.normalize(entry);
+		if (
+			entry.includes("\\") ||
+			path.posix.isAbsolute(entry) ||
+			/^[A-Za-z]:[\\/]/.test(entry) ||
+			normalized !== entry ||
+			(normalized !== "package" && !normalized.startsWith("package/"))
+		) {
+			throw new Error(`Native archive entry escapes package root: ${entry}`);
+		}
+	}
+}
+
 async function installPublishedNativeAddon(
 	sourceDir: string,
 	target: SourceBuildTarget,
@@ -512,6 +535,14 @@ async function installPublishedNativeAddon(
 	const tarballPath = path.join(tempDir, "native.tgz");
 	try {
 		await fs.promises.writeFile(tarballPath, tarball);
+		const listing = await runChecked(["tar", "-tzf", tarballPath], sourceDir);
+		validateNativeArchiveListing(listing.split(/\r?\n/));
+		const details = await runChecked(["tar", "-tvzf", tarballPath], sourceDir);
+		for (const line of details.split(/\r?\n/)) {
+			if (line.length > 0 && line[0] !== "-" && line[0] !== "d") {
+				throw new Error(`Native archive contains a non-regular entry: ${line}`);
+			}
+		}
 		await runChecked(["tar", "-xzf", tarballPath, "-C", tempDir], sourceDir);
 		const packageDir = path.join(tempDir, "package");
 		const entries = (await fs.promises.readdir(packageDir)).filter(entry => entry.endsWith(".node"));
@@ -520,7 +551,11 @@ async function installPublishedNativeAddon(
 		}
 		await fs.promises.mkdir(nativeRoot, { recursive: true });
 		for (const entry of entries) {
-			await fs.promises.copyFile(path.join(packageDir, entry), path.join(nativeRoot, entry));
+			const addonPath = path.join(packageDir, entry);
+			if (!(await fs.promises.lstat(addonPath)).isFile()) {
+				throw new Error(`Native archive addon is not a regular file: ${entry}`);
+			}
+			await fs.promises.copyFile(addonPath, path.join(nativeRoot, entry));
 		}
 	} finally {
 		await fs.promises.rm(tempDir, { recursive: true, force: true });
