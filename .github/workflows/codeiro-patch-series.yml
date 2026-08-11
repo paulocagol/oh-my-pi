@@ -1,0 +1,42 @@
+name: Codeiro patch series
+
+on:
+  push:
+    branches: [codeiro]
+    paths:
+      - "codeiro/**"
+      - "packages/**"
+      - ".github/workflows/codeiro-patch-series.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apply-series:
+    name: Aplicar patches na tag base
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout completo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validar aplicação ordenada da série
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base_tag="$(git describe --tags --abbrev=0 HEAD^)"
+          staging="$(mktemp -d)"
+          trap 'rm -rf "${staging}"' EXIT
+
+          git archive "${base_tag}" | tar -x -C "${staging}"
+          while IFS= read -r patch || [ -n "${patch}" ]; do
+            case "${patch}" in
+              ""|\#*) continue ;;
+            esac
+            patch_path="${GITHUB_WORKSPACE}/codeiro/patches/${patch}"
+            git -C "${staging}" apply --check "${patch_path}"
+            git -C "${staging}" apply "${patch_path}"
+          done < "${GITHUB_WORKSPACE}/codeiro/patches/series"
