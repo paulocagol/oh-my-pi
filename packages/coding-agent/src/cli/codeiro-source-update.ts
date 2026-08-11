@@ -491,6 +491,34 @@ export function validateNativeArchiveListing(entries: readonly string[]): void {
 }
 
 /**
+ * Create and validate every directory between the staging root and the native
+ * addon root. A check of only the leaf would still follow a symlink in
+ * `packages` or `natives`.
+ */
+export async function ensureNativeAddonDirectoryChain(rootDir: string, targetDir: string): Promise<void> {
+	const relative = path.relative(rootDir, targetDir);
+	if (
+		relative.length === 0 ||
+		path.isAbsolute(relative) ||
+		relative === ".." ||
+		relative.startsWith(`..${path.sep}`)
+	) {
+		throw new Error(`Native addon root escapes staging root: ${targetDir}`);
+	}
+	if (!(await fs.promises.lstat(rootDir)).isDirectory()) {
+		throw new Error(`Native addon staging root is not a real directory: ${rootDir}`);
+	}
+	let current = rootDir;
+	for (const segment of relative.split(path.sep)) {
+		current = path.join(current, segment);
+		await fs.promises.mkdir(current, { recursive: true });
+		if (!(await fs.promises.lstat(current)).isDirectory()) {
+			throw new Error(`Native addon path component is not a real directory: ${current}`);
+		}
+	}
+}
+
+/**
  * Replace an extracted native addon without following a destination symlink.
  *
  * The temporary file and the final rename stay in the checked directory, so
@@ -588,10 +616,7 @@ async function installPublishedNativeAddon(
 		if (entries.length === 0) {
 			throw new Error(`Native package ${packageName}@${version} contains no addon`);
 		}
-		await fs.promises.mkdir(nativeRoot, { recursive: true });
-		if (!(await fs.promises.lstat(nativeRoot)).isDirectory()) {
-			throw new Error(`Native addon root is not a real directory: ${nativeRoot}`);
-		}
+		await ensureNativeAddonDirectoryChain(sourceDir, nativeRoot);
 		for (const entry of entries) {
 			const addonPath = path.join(packageDir, entry);
 			if (!(await fs.promises.lstat(addonPath)).isFile()) {
