@@ -3,3 +3,4 @@
 0003-fix-limpar-valida-o-do-source-updater.patch
 0004-fix-bloquear-traversal-no-addon-nativo.patch
 0005-fix-proteger-destino-do-addon-nativo.patch
+0006-fix-validar-ancestrais-do-addon-nativo.patch
