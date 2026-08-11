@@ -57,9 +57,6 @@ const SOURCE_BUILD_ARTIFACTS: Readonly<Record<string, string>> = {
 	"win32-x64": "omp-windows-x64.exe",
 };
 
-/** Where the release build drops its artifacts, relative to the source root. */
-const BUILD_OUTPUT_DIR = path.join("packages", "coding-agent", "binaries");
-
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 /** Pinned description of how to rebuild this install from source. */
@@ -171,7 +168,7 @@ export function parseCodeiroManifest(value: unknown, source: string): CodeiroMan
 
 	const patchRef = requireString(value, "patchRef", source);
 	requireNotOptionLike(patchRef, "patchRef", source);
-	if (!/^[A-Za-z0-9._\/-]+$/.test(patchRef) || patchRef.includes("..")) {
+	if (!/^[A-Za-z0-9._/-]+$/.test(patchRef) || patchRef.includes("..")) {
 		throw manifestError(source, "`patchRef` must be a plain branch, tag or commit");
 	}
 
