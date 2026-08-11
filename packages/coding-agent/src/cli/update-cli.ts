@@ -16,6 +16,7 @@ import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { $ } from "bun";
 import { theme } from "../modes/theme/theme";
 import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
+import { loadCodeiroInstall, resolveManifestCandidates, runCodeiroSourceUpdate } from "./codeiro-source-update";
 
 const REPO = "can1357/oh-my-pi";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
@@ -1566,6 +1567,25 @@ function installerHint(): string {
  */
 export async function runUpdateCommand(opts: { force: boolean; check: boolean }): Promise<void> {
 	console.log(chalk.dim(`Current version: ${VERSION}`));
+
+	// Opt-in source-build backend: only a `codeiro-omp.json` next to the
+	// running binary diverts the update, and everything below stays the
+	// official flow for every other install.
+	const codeiroInstall = await loadCodeiroInstall(resolveManifestCandidates(process.execPath));
+	if (codeiroInstall) {
+		try {
+			await runCodeiroSourceUpdate({
+				install: codeiroInstall,
+				force: opts.force,
+				check: opts.check,
+				deps: { isMuslLinux, verifyBinaryAtPath, replaceBinaryForUpdate, sweepStaleBackups },
+			});
+		} catch (err) {
+			console.error(chalk.red(`Update failed: ${err}`));
+			process.exit(1);
+		}
+		return;
+	}
 
 	// Check for updates
 	let release: ReleaseInfo;
