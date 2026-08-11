@@ -15,6 +15,7 @@ import {
 	resolveSourceBuildTarget,
 	resolveStagingLayout,
 	runCodeiroSourceUpdate,
+	validateNativeArchiveListing,
 } from "@oh-my-pi/pi-coding-agent/cli/codeiro-source-update";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
@@ -240,9 +241,15 @@ describe("resolveStagingLayout", () => {
 describe("parsePatchSeries", () => {
 	it("keeps order and drops comments and blank lines", () => {
 		const entries = parsePatchSeries(
-			["# series", "", "0001-first.patch", "  0002-second.patch  ", "\t# trailing comment", "0003-third.patch", ""].join(
-				"\r\n",
-			),
+			[
+				"# series",
+				"",
+				"0001-first.patch",
+				"  0002-second.patch  ",
+				"\t# trailing comment",
+				"0003-third.patch",
+				"",
+			].join("\r\n"),
 		);
 
 		expect(entries).toEqual(["0001-first.patch", "0002-second.patch", "0003-third.patch"]);
@@ -251,6 +258,19 @@ describe("parsePatchSeries", () => {
 	it("returns nothing for a comment-only series", () => {
 		expect(parsePatchSeries("# nothing here\n\n")).toEqual([]);
 	});
+});
+
+describe("validateNativeArchiveListing", () => {
+	it("accepts package-root files and directories", () => {
+		expect(() => validateNativeArchiveListing(["package/", "package/pi_natives.darwin-arm64.node"])).not.toThrow();
+	});
+
+	it.each(["../outside", "package/../../outside", "/tmp/outside", "C:/outside", "package\\outside"])(
+		"rejects archive entry %s",
+		entry => {
+			expect(() => validateNativeArchiveListing([entry])).toThrow(/escapes package root/);
+		},
+	);
 });
 
 describe("resolvePatchSeriesFiles", () => {
