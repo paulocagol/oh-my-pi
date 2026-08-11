@@ -4,5 +4,5 @@
 	"patchRepo": "https://github.com/paulocagol/oh-my-pi.git",
 	"patchRef": "codeiro",
 	"patchSeries": "codeiro/patches/series",
-	"sourceRoot": "~/.local/share/codeiro-omp"
+	"sourceRoot": "~/.local/share/codeiro-omp-source"
 }
