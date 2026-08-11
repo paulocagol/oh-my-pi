@@ -60,9 +60,12 @@ aplicar nela. Para regenerar:
 git fetch upstream --tags
 git rebase <nova-tag>            # na branch codeiro
 rm -f codeiro/patches/*.patch
-git format-patch <nova-tag>..codeiro -o codeiro/patches
+git format-patch <nova-tag>..codeiro -o codeiro/patches -- ':(exclude)codeiro'
 (cd codeiro/patches && ls *.patch > series)
 ```
+
+O `:(exclude)codeiro` mantém a série fora dela mesma: sem ele cada regeneração
+embute os patches anteriores no patch novo.
 
 Confira que a série reproduz a branch a partir da tag limpa antes de publicar:
 
