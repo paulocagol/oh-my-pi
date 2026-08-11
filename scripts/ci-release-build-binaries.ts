@@ -178,6 +178,15 @@ async function resetArtifacts(): Promise<void> {
 	await runCommand(["bun", "run", "gen:mupdf:reset"], repoRoot);
 }
 
+async function preserveBuiltArtifacts(selectedTargets: readonly BinaryTarget[]): Promise<void> {
+	const outputDir = Bun.env.OMP_BUILD_OUTPUT_DIR?.trim();
+	if (!outputDir) return;
+	await fs.mkdir(outputDir, { recursive: true });
+	for (const target of selectedTargets) {
+		await fs.copyFile(path.join(repoRoot, target.outfile), path.join(outputDir, path.basename(target.outfile)));
+	}
+}
+
 async function main(): Promise<void> {
 	const requestedTargets = parseRequestedTargets();
 	const selectedTargets = requestedTargets ? targets.filter(target => requestedTargets.has(target.id)) : targets;
@@ -198,12 +207,15 @@ async function main(): Promise<void> {
 	await fs.mkdir(binariesDir, { recursive: true });
 	// Generate inside the try so resetArtifacts() always restores the empty
 	// checked-in placeholders, even if a generate or build step throws.
+	let buildCompleted = false;
 	try {
 		await generateBundle();
 		for (const target of selectedTargets) {
 			await buildBinary(target);
 		}
+		buildCompleted = true;
 	} finally {
+		if (buildCompleted) await preserveBuiltArtifacts(selectedTargets);
 		await resetArtifacts();
 	}
 }
