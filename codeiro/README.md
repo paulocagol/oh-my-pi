@@ -52,10 +52,16 @@ publicado para a mesma versão; precisa de `git`, `bun` 1.3.14+ e `tar` no PATH.
 
 O updater valida o SHA-512 do tarball publicado, rejeita entradas absolutas ou
 com `..`, rejeita links e arquivos especiais antes da extração e só copia
-arquivos `.node` regulares do diretório `package/`. Isso protege o staging
-contra traversal do archive. A validação não substitui a confiança no upstream,
-no registry npm e na proveniência do pacote; o MVP não faz uma auditoria
-independente do conteúdo nativo.
+arquivos `.node` regulares do diretório `package/`. Antes da instalação, valida
+com `lstat` o `sourceRoot` e cada ancestral de `packages/natives/native`; também
+rejeita symlink no arquivo final e faz a troca por arquivo temporário e
+`rename` atômico. Isso protege o staging contra traversal e symlinks
+preexistentes no caminho de instalação.
+
+A proteção não cobre um processo local concorrente que troque um ancestral entre
+a validação e o `rename`, nem substitui a confiança no upstream, no registry npm
+e na proveniência do pacote. O MVP não faz uma auditoria independente do
+conteúdo nativo.
 
 ## Manter a série
 
@@ -82,3 +88,23 @@ Confira que a série reproduz a branch a partir da tag limpa antes de publicar:
 git archive <nova-tag> | tar -x -C /tmp/check
 (cd /tmp/check && git apply --check /caminho/codeiro/patches/*.patch)
 ```
+
+Depois de validar a série, publique a branch de desenvolvimento e crie uma
+referência imutável para a combinação upstream + patches:
+
+```sh
+git push origin codeiro
+git tag codeiro-omp-<versao-upstream>
+git push origin codeiro-omp-<versao-upstream>
+```
+
+Para uma instalação compartilhada, provisione a tag, não a branch:
+
+```sh
+CODEIRO_OMP_PATCH_REPO=https://github.com/paulocagol/oh-my-pi.git \
+CODEIRO_OMP_PATCH_REF=codeiro-omp-<versao-upstream> \
+just omp-provision
+```
+
+A branch `codeiro` continua sendo o espaço de desenvolvimento; a tag publicada
+é o contrato reprodutível do runtime.
