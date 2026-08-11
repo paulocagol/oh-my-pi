@@ -9,6 +9,7 @@ import {
 	loadCodeiroInstall,
 	parseCodeiroManifest,
 	parsePatchSeries,
+	replaceNativeAddonFile,
 	resolveLatestStableRelease,
 	resolveManifestCandidates,
 	resolvePatchSeriesFiles,
@@ -271,6 +272,21 @@ describe("validateNativeArchiveListing", () => {
 			expect(() => validateNativeArchiveListing([entry])).toThrow(/escapes package root/);
 		},
 	);
+});
+
+describe("replaceNativeAddonFile", () => {
+	it("fails closed when the destination is a symlink", async () => {
+		const dir = await makeTempDir();
+		const sourcePath = path.join(dir, "source.node");
+		const targetPath = path.join(dir, "target.node");
+		const destinationPath = path.join(dir, "addon.node");
+		await fs.writeFile(sourcePath, "new addon");
+		await fs.writeFile(targetPath, "untouched");
+		await fs.symlink(targetPath, destinationPath);
+
+		await expect(replaceNativeAddonFile(sourcePath, destinationPath)).rejects.toThrow(/symlink/);
+		expect(await fs.readFile(targetPath, "utf8")).toBe("untouched");
+	});
 });
 
 describe("resolvePatchSeriesFiles", () => {
