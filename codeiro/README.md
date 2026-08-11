@@ -45,8 +45,8 @@ Campos:
 
 ## Pré-requisitos da máquina
 
-O build roda o bootstrap do próprio repositório, então precisa de `git`, `bun`
-e `bazelisk` (ou `bazel`) no PATH. O updater checa isso antes de clonar.
+O build roda o bootstrap do próprio repositório e reutiliza o addon nativo
+publicado para a mesma versão; precisa de `git`, `bun` 1.3.14+ e `tar` no PATH.
 
 ## Manter a série
 
