@@ -88,7 +88,7 @@ const piSegment: StatusLineSegment = {
 			const icon = theme.icon.ghost ? `${theme.icon.ghost} ` : "";
 			return { content: theme.fg("warning", `${icon}${ctx.focusedAgentId} `), visible: true };
 		}
-		const content = theme.icon.pi ? `${theme.icon.pi} ` : "";
+		const content = theme.icon.pi ? theme.icon.pi : "";
 		return { content: theme.fg("accent", content), visible: true };
 	},
 };
