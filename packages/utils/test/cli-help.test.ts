@@ -184,4 +184,24 @@ describe("run() usage errors", () => {
 		expect(out).toContain("error: Unknown option '--unknown'");
 		expect(out).toContain("$ omp bench MODELS... [FLAGS]");
 	});
+	it("rejects fractional and suffixed integer flags instead of truncating them", async () => {
+		const commands: CommandEntry[] = [{ name: "bench", load: async () => BenchLikeCommand }];
+		for (const value of ["1.5", "1abc", "1e2"]) {
+			const errs: string[] = [];
+			const stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
+				errs.push(String(chunk));
+				return true;
+			});
+			const prevExitCode = process.exitCode;
+			try {
+				await expect(
+					run({ bin: "omp", version: "0.0.0", argv: ["bench", "model", `--runs=${value}`], commands }),
+				).resolves.toBeUndefined();
+			} finally {
+				stderrSpy.mockRestore();
+				process.exitCode = prevExitCode ?? 0;
+			}
+			expect(errs.join("")).toContain(`Expected integer for --runs, got "${value}"`);
+		}
+	});
 });

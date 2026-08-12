@@ -32,14 +32,9 @@ import { shouldDiscoverMcp } from "./read-cli";
 const URL_ENTRY_RE = /(?:^|;)\s*[a-z][a-z0-9+.-]*:\/\//i;
 
 /**
- * `Flags.integer` rejects non-numeric input but accepts `--limit=0`,
- * `--limit=-5` and `--context=-1`. `GrepToolOptions` then clamps them —
- * `Math.max(1, limit)`, `Math.max(0, context)` — so a zero or negative flag
- * quietly collapses the search to a single match, or drops the context the
- * native branch would have printed. `NaN`, reachable from a programmatic
- * caller, windows the search down to zero files and reports "No matches
- * found" over real ones. Each is a wrong answer carrying a success exit
- * code, so reject at the edge instead of clamping.
+ * `Flags.integer` validates lexical values before this branch. The direct
+ * helper still rejects NaN and out-of-range values because tests and SDK users
+ * can call it without the command parser.
  */
 function requireBounded(value: number, flag: string, min: number): number {
 	if (!Number.isInteger(value) || value < min) {
@@ -84,7 +79,7 @@ export async function runInternalUrlGrep(cmd: GrepCommandArgs): Promise<boolean>
 		// Flags with no `GrepTool` equivalent. Rejecting beats returning a result
 		// the flag never shaped; the throw also keeps this check ahead of the
 		// search no matter how the function is later reordered.
-		if (cmd.glob) throw new ToolError(`--glob is not supported for internal URLs: ${cmd.path}`);
+		if (cmd.glob !== undefined) throw new ToolError(`--glob is not supported for internal URLs: ${cmd.path}`);
 		if (cmd.mode !== GrepOutputMode.Content) {
 			throw new ToolError(`--files and --count are not supported for internal URLs: ${cmd.path}`);
 		}
