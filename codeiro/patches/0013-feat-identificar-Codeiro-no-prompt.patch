@@ -1,0 +1,27 @@
+From 2c9f4f4abbeee1966528695d55468abe4a345c38 Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Wed, 12 Aug 2026 08:38:23 -0300
+Subject: [PATCH 13/13] feat: identificar Codeiro no prompt
+
+---
+ packages/coding-agent/src/modes/theme/symbols.ts | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/packages/coding-agent/src/modes/theme/symbols.ts b/packages/coding-agent/src/modes/theme/symbols.ts
+index e3104d2b19..955d36ae31 100644
+--- a/packages/coding-agent/src/modes/theme/symbols.ts
++++ b/packages/coding-agent/src/modes/theme/symbols.ts
+@@ -570,8 +570,8 @@ const NERD_SYMBOLS: SymbolMap = {
+ 	"icon.cost": "\uf155",
+ 	// pick:  | alt: ◷ ◴
+ 	"icon.time": "\uf017",
+-	// pick:  | alt: π ∏ ∑
+-	"icon.pi": "\ue22c",
++	// pick:  (nf-dev-c) | alt:   C
++	"icon.pi": "\ue771",
+ 	// pick: 󰊠 (nf-md-ghost) | alt: 👻
+ 	"icon.ghost": "\u{f02a0}",
+ 	// pick:  | alt: 
+-- 
+2.55.0
+
