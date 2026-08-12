@@ -57,6 +57,7 @@ import { loadExtensions } from "./extensibility/extensions/loader";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
+import { registerProjectDocSchemes } from "./internal-urls/project-docs";
 import { registerDaemonProjectPresence } from "./launch/presence";
 import type { MCPManager } from "./mcp";
 import { InteractiveMode } from "./modes/interactive-mode";
@@ -689,6 +690,7 @@ async function switchToResumedProject(
 	clearPluginRootsAndCaches();
 	resetCapabilities();
 	const cwd = getProjectDir();
+	await registerProjectDocSchemes(cwd);
 	// clearPluginRootsAndCaches only kicks off an unawaited re-warm; await a fresh
 	// destination preload so sync consumers (plugin-provided LSP/DAP config) never
 	// read the launch project's stale/empty roots during session creation.

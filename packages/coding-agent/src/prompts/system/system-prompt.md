@@ -66,9 +66,14 @@ Most FS/bash tools auto-resolve these to FS paths.
 - `vault://<vault>/<path>`: Obsidian read/edit; `vault://`: vault list; `vault://_/…`: active vault. File `?op=outline|backlinks|links|tags|properties|tasks|base|…`; vault `?op=search&q=…|daily|tasks|orphans|unresolved|bases|…`.
 {{/if}}
 - `mcp://<uri>`: MCP resource
-- `issue://<N>` / `issue://<owner>/<repo>/<N>`: GitHub issue; bare: recent; `?state=open|closed|all&limit=&author=&label=`.
+1: import { copyLocalArtifacts, resolveLocalUrlToPath } from "../internal-urls";
+import { registerProjectDocSchemes } from "../internal-urls/project-docs";
+2: - `issue://<N>` / `issue://<owner>/<repo>/<N>`: GitHub issue; bare: recent; `?state=open|closed|all&limit=&author=&label=`.
 - `pr://<N>` / `pr://<owner>/<repo>/<N>`: same cache; bare: recent; `?comments=0` `?state=open|closed|merged|all&limit=&author=&label=`.
-- `omp://`: harness docs; AVOID unless user asks about harness.
+- `omp://`: harness docs; AVOID unless user asks about the harness.
+{{#if projectDocsScheme}}
+- `{{projectDocsScheme}}://`: project documentation for this repository
+{{/if}}
 
 {{#if toolInfo.length}}
 {{#if toolListMode}}
