@@ -2,7 +2,7 @@
 	"distribution": "codeiro-omp",
 	"upstreamRepo": "can1357/oh-my-pi",
 	"patchRepo": "https://github.com/paulocagol/oh-my-pi.git",
-	"patchRef": "codeiro-omp-v17.2.15-c4",
+	"patchRef": "codeiro-omp-v17.2.15-c5",
 	"patchSeries": "codeiro/patches/series",
 	"sourceRoot": "~/.local/share/codeiro-omp-source"
 }
