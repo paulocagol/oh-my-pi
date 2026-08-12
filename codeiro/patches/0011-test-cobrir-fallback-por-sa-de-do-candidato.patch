@@ -1,0 +1,90 @@
+From 69cca52071a6153292285f3ffd72514f579e129c Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Wed, 12 Aug 2026 08:14:41 -0300
+Subject: [PATCH 11/11] =?UTF-8?q?test:=20cobrir=20fallback=20por=20sa?=
+ =?UTF-8?q?=C3=BAde=20do=20candidato?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ .../test/agent-session-retry-fallback.test.ts | 63 +++++++++++++++++++
+ 1 file changed, 63 insertions(+)
+
+diff --git a/packages/coding-agent/test/agent-session-retry-fallback.test.ts b/packages/coding-agent/test/agent-session-retry-fallback.test.ts
+index e5784c9814..9e9b11c8d8 100644
+--- a/packages/coding-agent/test/agent-session-retry-fallback.test.ts
++++ b/packages/coding-agent/test/agent-session-retry-fallback.test.ts
+@@ -3891,6 +3891,69 @@ describe("AgentSession retry fallback", () => {
+ 		expect(session.model?.id).toBe(compatibleFallback.id);
+ 	});
+ 
++	it("accepts an unknown-quota candidate after skipping depleted fallback models", async () => {
++		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
++		const depletedFallback = getBundledModel("openai", "gpt-4o-mini");
++		const unknownFallback = getBundledModel("google", "gemini-2.0-flash");
++		if (!primaryModel || !depletedFallback || !unknownFallback) {
++			throw new Error("Expected bundled quota-aware fallback models");
++		}
++		const requestedModels: string[] = [];
++		const healthChecks: Array<{ provider: string; modelId?: string; sessionId?: string }> = [];
++		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
++		const agent = createFallbackAgent(primaryModel, requestedModels);
++		const settings = Settings.isolated({
++			"compaction.enabled": false,
++			"retry.usageAwareFallback": true,
++			"retry.usageReservePolicy": "auto",
++			"retry.fallbackChains": {
++				default: [
++					`${depletedFallback.provider}/${depletedFallback.id}`,
++					`${unknownFallback.provider}/${unknownFallback.id}`,
++				],
++			},
++		});
++		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
++		vi.spyOn(modelRegistry.authStorage, "getModelUsageHealth").mockImplementation(async (provider, options) => {
++			healthChecks.push({ provider, modelId: options.modelId, sessionId: options.sessionId });
++			if (options.modelId === primaryModel.id || options.modelId === depletedFallback.id) {
++				return {
++					state: "depleted",
++					accounts: [{ credentialId: 1, credentialType: "oauth", state: "depleted" }],
++				};
++			}
++			return { state: "unknown", accounts: [] };
++		});
++		session = new AgentSession({
++			agent,
++			sessionManager: SessionManager.inMemory(),
++			settings,
++			modelRegistry,
++		});
++		session.subscribe(event => {
++			if (event.type === "retry_fallback_applied") fallbackAppliedEvents.push(event);
++		});
++
++		await session.prompt("Use the unknown-quota fallback");
++		await session.waitForIdle();
++
++		expect(healthChecks.map(check => check.modelId)).toEqual([
++			primaryModel.id,
++			depletedFallback.id,
++			unknownFallback.id,
++		]);
++		expect(healthChecks.every(check => check.sessionId === session?.sessionId)).toBe(true);
++		expect(requestedModels).toEqual([`${unknownFallback.provider}/${unknownFallback.id}`]);
++		expect(fallbackAppliedEvents).toEqual([
++			{
++				type: "retry_fallback_applied",
++				from: `${primaryModel.provider}/${primaryModel.id}`,
++				to: `${unknownFallback.provider}/${unknownFallback.id}`,
++				role: "default",
++			},
++		]);
++	});
++
+ 	it("accepts cached Ollama Cloud fallback selectors during startup validation", () => {
+ 		const primaryModel = getBundledModel("openai", "gpt-4o-mini");
+ 		if (!primaryModel) {
+-- 
+2.55.0
+
