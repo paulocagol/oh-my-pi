@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery.
 
 ## [17.2.15] - 2026-08-12
 

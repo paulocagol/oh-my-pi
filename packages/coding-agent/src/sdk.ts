@@ -104,7 +104,12 @@ import {
 } from "./extensibility/skills";
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import type { HindsightSessionState } from "./hindsight/state";
-import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
+import {
+	LocalProtocolHandler,
+	type LocalProtocolOptions,
+	projectDocsSchemeForCwd,
+	registerProjectDocSchemes,
+} from "./internal-urls";
 import { setSharedLspEnabled } from "./lsp/client";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import {
@@ -1231,6 +1236,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 async function createAgentSessionScoped(options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> {
 	const cwd = options.cwd ?? getProjectDir();
+	await registerProjectDocSchemes(cwd);
 	const agentDir = options.agentDir ?? getAgentDir();
 	const eventBus = options.eventBus ?? new EventBus();
 
@@ -2810,6 +2816,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			tools: Map<string, AgentTool>,
 		): Promise<BuildSystemPromptResult> => {
 			const promptCwd = sessionManager.getCwd();
+			const projectDocsScheme = await projectDocsSchemeForCwd(promptCwd);
 			const activeRepoContext = hasSession
 				? await logger.time("resolveActiveRepoContext", resolveRepoContext, promptCwd)
 				: initialActiveRepoContext;
@@ -2927,6 +2934,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				personality: agentKind === "sub" ? "none" : settings.get("personality"),
 				renderMermaid: settings.get("tui.renderMermaid"),
 				activeRepoContext,
+				projectDocsScheme,
 			});
 
 			if (options.systemPrompt === undefined) {

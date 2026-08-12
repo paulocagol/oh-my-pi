@@ -81,7 +81,14 @@ import type { CompactOptions } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import { loadSlashCommands } from "../extensibility/slash-commands";
 import type { Goal, GoalModeState } from "../goals/state";
-import { copyLocalArtifacts, resolveLocalUrlToPath } from "../internal-urls";
+1: import { copyLocalArtifacts, resolveLocalUrlToPath } from "../internal-urls";
+import { registerProjectDocSchemes } from "../internal-urls/project-docs";
+2: - `issue://<N>` / `issue://<owner>/<repo>/<N>`: GitHub issue; bare: recent; `?state=open|closed|all&limit=&author=&label=`.
+- `pr://<N>` / `pr://<owner>/<repo>/<N>`: same cache; bare: recent; `?comments=0` `?state=open|closed|merged|all&limit=&author=&label=`.
+- `omp://`: harness docs; AVOID unless user asks about the harness.
+{{#if projectDocsScheme}}
+- `{{projectDocsScheme}}://`: project documentation for this repository
+{{/if}}
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import type { MCPManager } from "../mcp";
 import {
@@ -1384,6 +1391,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.refreshSkillState();
 		await this.refreshSlashCommandState(newCwd);
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
+		await registerProjectDocSchemes(newCwd);
 		this.statusLine.applyCwdChange();
 	}
 
