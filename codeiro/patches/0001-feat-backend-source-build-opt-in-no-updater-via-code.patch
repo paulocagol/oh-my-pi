@@ -1,7 +1,7 @@
 From b46206b41bbca83708748fafeec26128cd07472f Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Tue, 11 Aug 2026 16:30:33 -0300
-Subject: [PATCH 01/15] feat: backend source-build opt-in no updater via
+Subject: [PATCH 01/17] feat: backend source-build opt-in no updater via
  codeiro-omp.json
 
 Sem o manifesto ao lado do binario o fluxo upstream continua identico. Com
