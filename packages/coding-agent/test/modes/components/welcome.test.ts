@@ -13,6 +13,13 @@ describe("WelcomeComponent tips", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("labels the welcome border with the Codeiro OMP version", () => {
+		const welcome = new WelcomeComponent("17.2.15", "model", "provider");
+		const lines = welcome.render(80).map(line => Bun.stripANSI(line));
+
+		expect(lines[0]).toContain("Codeiro OMP v17.2.15");
+	});
+
 	it("selects standard tip when preset is not unicode", () => {
 		vi.spyOn(theme, "getSymbolPreset").mockReturnValue("nerd");
 
