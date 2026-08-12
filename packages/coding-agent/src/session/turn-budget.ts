@@ -5,7 +5,7 @@ export interface BudgetDowngradeDecision {
 	reason: string;
 }
 
-/** Sum the completed assistant request costs in the current user turn. */
+/** Soma os custos das requisições do assistente concluídas no turno do usuário atual. */
 export function turnSpendUsd(messages: readonly AgentMessage[]): number {
 	const latestUser = messages.findLastIndex(message => message.role === "user");
 	let spendUsd = 0;
@@ -18,7 +18,7 @@ export function turnSpendUsd(messages: readonly AgentMessage[]): number {
 	return spendUsd;
 }
 
-/** Decide whether a positive turn budget was strictly exceeded. */
+/** Decide se um orçamento de turno positivo foi excedido estritamente. */
 export function decideBudgetDowngrade(spendUsd: number, budgetUsd: number): BudgetDowngradeDecision {
 	if (!(budgetUsd > 0)) return { downgrade: false, reason: "turn budget is disabled" };
 	if (!(spendUsd > budgetUsd)) return { downgrade: false, reason: "turn spend is within budget" };

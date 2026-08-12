@@ -329,19 +329,21 @@ describe("AgentSession retry fallback", () => {
 		expect(session.messages.some(message => message.role === "user")).toBe(true);
 	});
 
-	it("downgrades an over-budget turn before the next model call", async () => {
+	it("downgrades an over-budget turn after the history is compacted", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
 		if (!primaryModel || !fallbackModel) throw new Error("Expected bundled turn budget models");
 		const requestedModels: string[] = [];
-		const healthCalls: Array<{ provider: string; modelId: string; sessionId?: string }> = [];
+		const healthCalls: Array<{ provider: string; modelId: string; sessionId: string }> = [];
 		const toolSchema = type({ value: type("string") });
+		let compactHistory: (() => void) | undefined;
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "consume",
 			label: "Consume",
 			description: "Consume turn budget",
 			parameters: toolSchema,
 			async execute(_toolCallId, params) {
+				compactHistory?.();
 				return { content: [{ type: "text", text: params.value }], details: params };
 			},
 		};
@@ -369,6 +371,10 @@ describe("AgentSession retry fallback", () => {
 				return mock.stream(model, context, options);
 			},
 		});
+		compactHistory = () => {
+			// Simula uma compactação que substitui o histórico após a resposta com custo.
+			agent.replaceMessages(agent.state.messages.filter(message => message.role !== "assistant"));
+		};
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"retry.usageAwareFallback": true,
@@ -379,7 +385,10 @@ describe("AgentSession retry fallback", () => {
 		});
 		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
 		vi.spyOn(modelRegistry.authStorage, "getModelUsageHealth").mockImplementation(async (provider, options) => {
-			healthCalls.push({ provider, modelId: options.modelId, sessionId: options.sessionId });
+			const sessionId = options.sessionId;
+			const modelId = options.modelId;
+			if (!sessionId || !modelId) throw new Error("expected usage health identity");
+			healthCalls.push({ provider, modelId, sessionId });
 			return { state: "healthy", accounts: [] };
 		});
 		session = new AgentSession({

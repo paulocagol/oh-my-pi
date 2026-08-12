@@ -1555,6 +1555,14 @@ export const SETTINGS_SCHEMA = {
 			label: "Turn Budget",
 			description: "Downgrade to the next configured fallback after this turn spends more than this amount in USD.",
 			condition: "usageAwareFallbackEnabled",
+			options: [
+				{ value: "0", label: "Disabled", description: "Keep the primary model for the whole turn." },
+				{ value: "0.25", label: "$0.25" },
+				{ value: "0.5", label: "$0.50" },
+				{ value: "1", label: "$1" },
+				{ value: "2", label: "$2" },
+				{ value: "5", label: "$5" },
+			],
 		},
 	},
 	"retry.usageReservePct": {

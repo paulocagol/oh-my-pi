@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 - Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery.
+- Added opt-in `retry.turnBudgetUsd` to downgrade over-budget turns through the configured native fallback chain, including compaction-safe spend tracking.
 
 ## [17.2.13] - 2026-08-11
 

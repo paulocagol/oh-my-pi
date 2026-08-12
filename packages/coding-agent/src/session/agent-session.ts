@@ -630,8 +630,8 @@ export class AgentSession {
 	readonly #memory: SessionMemory;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
 
-	#resetPromptMaintenanceState(): void {
-		this.#recovery.resetForNewPrompt();
+	#resetPromptMaintenanceState(options?: { resetTurnSpend?: boolean }): void {
+		this.#recovery.resetForNewPrompt(options);
 		this.#yieldTerminationPending = false;
 	}
 
@@ -786,7 +786,7 @@ export class AgentSession {
 		} catch (error) {
 			logger.warn("IRC wake turn observer failed to start", { error: String(error) });
 		}
-		this.#resetPromptMaintenanceState();
+		this.#resetPromptMaintenanceState({ resetTurnSpend: true });
 		// Capture the generation before the wake so its post-prompt recovery wait
 		// bails the instant an abort (which bumps #promptGeneration) supersedes
 		// this wake — otherwise the wait would follow a successor turn (a queued
@@ -5214,6 +5214,7 @@ export class AgentSession {
 			await this.#promptWithMessage(message, expandedText, {
 				...options,
 				images: normalizedImages,
+				resetTurnSpend: options?.userInitiated ?? !options?.synthetic,
 				prependMessages:
 					preludeMessages.length > 0 || keywordNotices.length > 0 || imageDescriptionNotice
 						? [...preludeMessages, ...keywordNotices, ...(imageDescriptionNotice ? [imageDescriptionNotice] : [])]
@@ -5282,9 +5283,9 @@ export class AgentSession {
 			attribution: message.attribution ?? "agent",
 			timestamp: Date.now(),
 		};
-
 		await this.#promptWithMessage(customMessage, textContent, {
 			...options,
+			resetTurnSpend: customMessage.attribution === "user",
 			prependMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
 		});
 	}
@@ -5296,11 +5297,13 @@ export class AgentSession {
 			prependMessages?: AgentMessage[];
 			skipPostPromptRecoveryWait?: boolean;
 			acceptTerminalEmptyStop?: boolean;
+			resetTurnSpend?: boolean;
 		},
 	): Promise<void> {
 		this.#beginInFlight();
 		const generation = this.#promptGeneration;
 		try {
+			this.#resetPromptMaintenanceState({ resetTurnSpend: options?.resetTurnSpend });
 			await this.#recovery.maybeRestoreRetryFallbackPrimary();
 			if (!(await this.#runUsageAwarePreflightForNextModelCall())) return;
 			// Flush any pending bash messages before the new prompt
@@ -5309,7 +5312,6 @@ export class AgentSession {
 			this.#irc.flushPending();
 
 			this.#todo.resetCycle();
-			this.#resetPromptMaintenanceState();
 			this.#recovery.setAcceptTerminalEmptyStop(options?.acceptTerminalEmptyStop === true);
 
 			// Validate model
@@ -5932,7 +5934,7 @@ export class AgentSession {
 			if (!(await this.#runUsageAwarePreflightForNextModelCall())) return;
 			const acceptTerminalEmptyStop = options?.acceptTerminalEmptyStop === true;
 			if (acceptTerminalEmptyStop) {
-				this.#resetPromptMaintenanceState();
+				this.#resetPromptMaintenanceState({ resetTurnSpend: false });
 			}
 			this.#recovery.setAcceptTerminalEmptyStop(acceptTerminalEmptyStop);
 			await this.agent.prompt(message);

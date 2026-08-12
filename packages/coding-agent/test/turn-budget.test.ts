@@ -3,7 +3,10 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { decideBudgetDowngrade, turnSpendUsd } from "@oh-my-pi/pi-coding-agent/session/turn-budget";
 
 function message(role: AgentMessage["role"], cost?: number): AgentMessage {
-	if (role === "assistant") return { role, usage: cost === undefined ? ({} as never) : ({ cost: { total: cost } } as never) } as AgentMessage;
+	if (role === "assistant") {
+		const usage = cost === undefined ? {} : { cost: { total: cost } };
+		return { role, usage } as unknown as AgentMessage;
+	}
 	return { role } as AgentMessage;
 }
 

@@ -62,9 +62,9 @@ import {
 	validateRetryFallbackChains,
 } from "./retry-fallback-chains";
 import { getLatestCompactionEntry } from "./session-context";
-import { decideBudgetDowngrade, turnSpendUsd } from "./turn-budget";
 import { EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
+import { decideBudgetDowngrade, turnSpendUsd } from "./turn-budget";
 import { sameMessageContent, sessionMessagePersistenceKey } from "./turn-persistence";
 import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
 
@@ -190,6 +190,7 @@ export class TurnRecovery {
 	#usageLimitOutcomes = new WeakMap<AssistantMessage, Promise<UsageLimitOutcome>>();
 	#emptyStopRetryCount = 0;
 	#unexpectedStopRetryCount = 0;
+	#turnSpendUsd: number | undefined;
 	#acceptTerminalEmptyStopForPrompt = false;
 	// Three fields sit near the word "serve" and are deliberately distinct:
 	// `#activeRetryFallback.served` gates the one-shot `retry_fallback_succeeded`
@@ -308,11 +309,22 @@ export class TurnRecovery {
 		}
 	}
 
-	/** Resets per-prompt recovery counters and terminal-stop acceptance. */
-	resetForNewPrompt(): void {
+	/** Redefine contadores de recuperação e aceitação de parada vazia por prompt. */
+	resetForNewPrompt(options?: { resetTurnSpend?: boolean }): void {
 		this.#emptyStopRetryCount = 0;
 		this.#unexpectedStopRetryCount = 0;
 		this.#acceptTerminalEmptyStopForPrompt = false;
+		if (options?.resetTurnSpend) this.#turnSpendUsd = 0;
+	}
+
+	/** Registra o custo finito e não negativo de uma mensagem do assistente assentada. */
+	recordAssistantSpend(message: AssistantMessage): void {
+		const cost = message.usage?.cost?.total;
+		if (this.#turnSpendUsd === undefined || typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) {
+			return;
+		}
+		const nextSpendUsd = this.#turnSpendUsd + cost;
+		this.#turnSpendUsd = Number.isFinite(nextSpendUsd) ? Math.max(0, nextSpendUsd) : Number.MAX_VALUE;
 	}
 
 	/** Sets whether one terminal empty stop is accepted for the current prompt. */
@@ -326,6 +338,7 @@ export class TurnRecovery {
 	 * persisted errors.
 	 */
 	async onAssistantSettledSuccessfully(message: AssistantMessage): Promise<void> {
+		this.recordAssistantSpend(message);
 		if (!assistantTurnProducedOutput(message)) {
 			return;
 		}
@@ -1294,10 +1307,10 @@ export class TurnRecovery {
 		}
 		if (signal.aborted || !modelsAreEqual(this.#host.model(), currentModel)) return false;
 		const selectedAccount = health.accounts.find(account => account.selected);
-		const budgetDecision = decideBudgetDowngrade(
-			turnSpendUsd(this.#host.agent.state.messages),
-			this.#host.settings.get("retry.turnBudgetUsd"),
-		);
+		const retainedSpendUsd = turnSpendUsd(this.#host.agent.state.messages);
+		const spendUsd =
+			this.#turnSpendUsd === undefined ? retainedSpendUsd : Math.max(this.#turnSpendUsd, retainedSpendUsd);
+		const budgetDecision = decideBudgetDowngrade(spendUsd, this.#host.settings.get("retry.turnBudgetUsd"));
 		if (health.state === "healthy") {
 			this.#usageReserveApprovedSelector = undefined;
 			if (
@@ -1390,7 +1403,10 @@ export class TurnRecovery {
 		if (!fallback) return false;
 
 		let shouldFallback =
-			budgetDecision.downgrade || health.state === "depleted" || reservePolicy === "auto" || !confirmer;
+			(budgetDecision.downgrade && (health.state === "healthy" || health.state === "unknown")) ||
+			health.state === "depleted" ||
+			reservePolicy === "auto" ||
+			!confirmer;
 		if (!shouldFallback && health.state === "reserve" && confirmer) {
 			const remainingFraction =
 				selectedAccount?.remainingFraction ??
