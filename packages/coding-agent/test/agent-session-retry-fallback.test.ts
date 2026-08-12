@@ -3891,6 +3891,69 @@ describe("AgentSession retry fallback", () => {
 		expect(session.model?.id).toBe(compatibleFallback.id);
 	});
 
+	it("accepts an unknown-quota candidate after skipping depleted fallback models", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const depletedFallback = getBundledModel("openai", "gpt-4o-mini");
+		const unknownFallback = getBundledModel("google", "gemini-2.0-flash");
+		if (!primaryModel || !depletedFallback || !unknownFallback) {
+			throw new Error("Expected bundled quota-aware fallback models");
+		}
+		const requestedModels: string[] = [];
+		const healthChecks: Array<{ provider: string; modelId?: string; sessionId?: string }> = [];
+		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		const agent = createFallbackAgent(primaryModel, requestedModels);
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.usageAwareFallback": true,
+			"retry.usageReservePolicy": "auto",
+			"retry.fallbackChains": {
+				default: [
+					`${depletedFallback.provider}/${depletedFallback.id}`,
+					`${unknownFallback.provider}/${unknownFallback.id}`,
+				],
+			},
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		vi.spyOn(modelRegistry.authStorage, "getModelUsageHealth").mockImplementation(async (provider, options) => {
+			healthChecks.push({ provider, modelId: options.modelId, sessionId: options.sessionId });
+			if (options.modelId === primaryModel.id || options.modelId === depletedFallback.id) {
+				return {
+					state: "depleted",
+					accounts: [{ credentialId: 1, credentialType: "oauth", state: "depleted" }],
+				};
+			}
+			return { state: "unknown", accounts: [] };
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") fallbackAppliedEvents.push(event);
+		});
+
+		await session.prompt("Use the unknown-quota fallback");
+		await session.waitForIdle();
+
+		expect(healthChecks.map(check => check.modelId)).toEqual([
+			primaryModel.id,
+			depletedFallback.id,
+			unknownFallback.id,
+		]);
+		expect(healthChecks.every(check => check.sessionId === session?.sessionId)).toBe(true);
+		expect(requestedModels).toEqual([`${unknownFallback.provider}/${unknownFallback.id}`]);
+		expect(fallbackAppliedEvents).toEqual([
+			{
+				type: "retry_fallback_applied",
+				from: `${primaryModel.provider}/${primaryModel.id}`,
+				to: `${unknownFallback.provider}/${unknownFallback.id}`,
+				role: "default",
+			},
+		]);
+	});
+
 	it("accepts cached Ollama Cloud fallback selectors during startup validation", () => {
 		const primaryModel = getBundledModel("openai", "gpt-4o-mini");
 		if (!primaryModel) {
