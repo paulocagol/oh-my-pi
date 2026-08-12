@@ -38,6 +38,9 @@ export const CODEIRO_MANIFEST_FILENAME = "codeiro-omp.json";
 /** Value `distribution` must carry for the manifest to be honoured. */
 export const CODEIRO_DISTRIBUTION = "codeiro-omp";
 
+/** Build record written next to an installed binary; see {@link CodeiroInstallLock}. */
+export const CODEIRO_LOCK_FILENAME = "codeiro-omp.lock.json";
+
 const GITHUB_API = "https://api.github.com";
 const NPM_REGISTRY = "https://registry.npmjs.org";
 const RELEASE_METADATA_TIMEOUT_MS = 30_000;
@@ -193,16 +196,19 @@ function assertRelativePath(value: string, key: string, source: string): void {
 /**
  * Binaries whose directory may hold a manifest.
  *
- * Only the running executable is considered, and only when it is actually an
- * `omp` binary: a source run (`bun src/cli.ts`) or a random host process must
+ * Only the running executable is considered, and only when its name is one the
+ * distribution actually installs: upstream ships `omp`, the fork ships
+ * `codeiro-omp`. A source run (`bun src/cli.ts`) or a random host process must
  * never adopt a manifest that happens to sit next to its interpreter, and the
- * binary that gets replaced must be the one that is running.
+ * binary that gets replaced must be the one that is running. The list stays a
+ * whitelist for that reason - an install renamed to anything else keeps the
+ * official flow.
  */
 export function resolveManifestCandidates(execPath: string | undefined): string[] {
 	if (!execPath) return [];
 	const base = path.basename(execPath).toLowerCase();
 	const stem = base.endsWith(".exe") ? base.slice(0, -".exe".length) : base;
-	return stem === APP_NAME ? [execPath] : [];
+	return stem === APP_NAME || stem === CODEIRO_DISTRIBUTION ? [execPath] : [];
 }
 
 /**
@@ -750,6 +756,102 @@ async function installBuiltBinary(
 }
 
 /**
+ * Record of what the installed binary was actually built from.
+ *
+ * The upstream version alone cannot identify a fork artifact: a new patch
+ * series over the same upstream tag produces a different binary carrying the
+ * same `--version`. The lock closes that gap by pinning the resolved patch
+ * commit, so a series bump rebuilds without `--force`.
+ */
+interface CodeiroInstallLock {
+	readonly version: string;
+	readonly upstreamTag: string;
+	readonly patchRef: string;
+	readonly patchCommit: string;
+	readonly builtAt: string;
+}
+
+const lockPathFor = (binaryPath: string): string => path.join(path.dirname(binaryPath), CODEIRO_LOCK_FILENAME);
+
+/**
+ * Read the lock next to an installed binary.
+ *
+ * Anything unreadable, malformed or incomplete reads as "unknown build", which
+ * forces a rebuild: a stale lock must never suppress one, and the rebuild is
+ * idempotent.
+ */
+async function readInstallLock(binaryPath: string): Promise<CodeiroInstallLock | undefined> {
+	let raw: string;
+	try {
+		raw = await fs.promises.readFile(lockPathFor(binaryPath), "utf8");
+	} catch {
+		return undefined;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return undefined;
+	}
+	if (!isRecord(parsed)) return undefined;
+	const fields = ["version", "upstreamTag", "patchRef", "patchCommit", "builtAt"] as const;
+	const lock: Record<string, string> = {};
+	for (const key of fields) {
+		const value = parsed[key];
+		if (typeof value !== "string" || value.length === 0) return undefined;
+		lock[key] = value;
+	}
+	return lock as unknown as CodeiroInstallLock;
+}
+
+/**
+ * Write the lock after a successful swap.
+ *
+ * Ordered after {@link installBuiltBinary} on purpose: if the swap fails the
+ * old binary stays in place and so does the lock describing it. A write
+ * failure only costs one redundant rebuild, so it warns instead of aborting an
+ * update that already succeeded.
+ */
+async function writeInstallLock(binaryPath: string, lock: CodeiroInstallLock): Promise<void> {
+	const target = lockPathFor(binaryPath);
+	const tempPath = `${target}.tmp.${process.pid}`;
+	try {
+		await fs.promises.writeFile(tempPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
+		await fs.promises.rename(tempPath, target);
+	} catch (err) {
+		await fs.promises.unlink(tempPath).catch(() => {});
+		console.warn(chalk.yellow(`Could not record ${CODEIRO_LOCK_FILENAME}: ${err}`));
+	}
+}
+
+/**
+ * Resolve `patchRef` to a commit on the patch remote.
+ *
+ * Tags are dereferenced (`^{}`) so an annotated tag and its commit compare
+ * equal, and a moving branch resolves to whatever it points at right now -
+ * which is exactly what makes the lock work for both kinds of ref.
+ */
+export function parseLsRemote(stdout: string, ref: string): string {
+	const rows = stdout
+		.split("\n")
+		.map(line => line.trim())
+		.filter(Boolean)
+		.map(line => line.split(/\s+/, 2) as [string, string])
+		.filter(([commit]) => /^[0-9a-f]{40}$/.test(commit));
+	const exact = rows.find(([, name]) => name === `refs/tags/${ref}^{}`);
+	if (exact) return exact[0];
+	const match = rows.find(([, name]) => name === `refs/tags/${ref}` || name === `refs/heads/${ref}` || name === ref);
+	if (match) return match[0];
+	throw new Error(`Patch ref \`${ref}\` not found on the patch repository`);
+}
+
+/** Resolve `patchRef` on the patch remote; `^{}` makes annotated tags compare equal. */
+async function resolvePatchCommit(patchRepo: string, patchRef: string): Promise<string> {
+	const stdout = await runChecked(["git", "ls-remote", patchRepo, patchRef, `${patchRef}^{}`], os.tmpdir());
+	return parseLsRemote(stdout, patchRef);
+}
+
+/**
  * Run the source-build update for a manifest-governed install.
  *
  * `check` short-circuits before any staging directory is touched, so
@@ -764,6 +866,8 @@ export async function runCodeiroSourceUpdate(options: {
 	fetchImpl?: Fetch;
 	githubToken?: string;
 	currentVersion?: string;
+	/** Test seam for {@link resolvePatchCommit}; production always resolves over the network. */
+	resolvePatchCommitImpl?: (patchRepo: string, patchRef: string) => Promise<string>;
 }): Promise<void> {
 	const { install, deps } = options;
 	const manifest = install.manifest;
@@ -774,14 +878,40 @@ export async function runCodeiroSourceUpdate(options: {
 	const release = await fetchLatestStableRelease(manifest.upstreamRepo, options.fetchImpl, options.githubToken);
 	const comparison = compareVersions(release.version, currentVersion);
 
-	if (comparison <= 0 && !options.force) {
+	// The upstream version is only half of the identity here: the patch series
+	// moves independently of it, so a same-version run still has to compare the
+	// resolved patch commit against what the installed binary was built from.
+	// `ls-remote` is a remote read, which keeps `--check` read-only.
+	const patchCommit = await (options.resolvePatchCommitImpl ?? resolvePatchCommit)(
+		manifest.patchRepo,
+		manifest.patchRef,
+	);
+	// Only a same-version run can be decided by the series: when the install is
+	// ahead of the upstream release, rebuilding would be a downgrade, so it
+	// stays up to date unless `--force` asks for that build explicitly.
+	const lock = comparison === 0 ? await readInstallLock(install.binaryPath) : undefined;
+	const seriesMatches =
+		lock?.version === currentVersion &&
+		lock.upstreamTag === release.tag &&
+		lock.patchRef === manifest.patchRef &&
+		lock.patchCommit === patchCommit;
+
+	if (comparison <= 0 && !options.force && (comparison < 0 || seriesMatches)) {
 		console.log(chalk.green(`${theme.status.success} Already up to date`));
 		return;
 	}
 	if (comparison > 0) {
 		console.log(chalk.cyan(`New version available: ${release.version}`));
-	} else {
+	} else if (options.force) {
 		console.log(chalk.yellow(`Forcing rebuild of ${release.version}`));
+	} else if (lock) {
+		console.log(
+			chalk.cyan(
+				`Patch series moved: ${manifest.patchRef} is ${patchCommit.slice(0, 12)}, installed build used ${lock.patchCommit.slice(0, 12)}`,
+			),
+		);
+	} else {
+		console.log(chalk.cyan(`No ${CODEIRO_LOCK_FILENAME} next to the binary; rebuilding to record what is installed`));
 	}
 	if (options.check) return;
 
@@ -810,6 +940,13 @@ export async function runCodeiroSourceUpdate(options: {
 	}
 
 	await installBuiltBinary(artifactPath, install, release, deps);
+	await writeInstallLock(install.binaryPath, {
+		version: release.version,
+		upstreamTag: release.tag,
+		patchRef: manifest.patchRef,
+		patchCommit,
+		builtAt: new Date().toISOString(),
+	});
 
 	console.log(chalk.green(`\n${theme.status.success} Updated to ${release.version} (source build)`));
 	console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
