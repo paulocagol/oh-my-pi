@@ -1,7 +1,7 @@
-From c22dd61a4d348753639fddc820b7adfc52faa6ae Mon Sep 17 00:00:00 2001
+From 9393f02a74915a09efec6ed9addbc3f02cfd2269 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Tue, 11 Aug 2026 22:28:57 -0300
-Subject: [PATCH 10/10] =?UTF-8?q?feat:=20permitir=20assets=20e=20curadoria?=
+Subject: [PATCH 10/11] =?UTF-8?q?feat:=20permitir=20assets=20e=20curadoria?=
  =?UTF-8?q?=20por=20exclude=20no=20cat=C3=A1logo=20por=20projeto?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -15,7 +15,7 @@ Content-Transfer-Encoding: 8bit
  4 files changed, 108 insertions(+), 9 deletions(-)
 
 diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
-index d2197bed2d..064bb2d6b4 100644
+index 42379e5878..33f5a456fd 100644
 --- a/packages/coding-agent/CHANGELOG.md
 +++ b/packages/coding-agent/CHANGELOG.md
 @@ -1,7 +1,7 @@
@@ -25,7 +25,7 @@ index d2197bed2d..064bb2d6b4 100644
 -- Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery.
 +- Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery. A docs root may carry the assets its Markdown links to — non-Markdown files are skipped, never indexed, and never resolvable — and `exclude` globs curate the generated index without becoming an access-control boundary.
  
- ## [17.2.14] - 2026-08-11
+ ## [17.2.15] - 2026-08-12
  
 diff --git a/packages/coding-agent/src/internal-urls/project-docs-manifest.ts b/packages/coding-agent/src/internal-urls/project-docs-manifest.ts
 index d9811aa546..e54b0f8475 100644
@@ -163,12 +163,12 @@ index d9811aa546..e54b0f8475 100644
  
  export function projectDocsManifestPath(repoRoot: string): string {
 diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
-index 4a14616039..0227c42243 100644
+index 2d1adc0613..ce88e724db 100644
 --- a/packages/coding-agent/src/prompts/system/system-prompt.md
 +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
-@@ -71,7 +71,7 @@ Special URLs for internal resources; with most FS/bash tools they auto-resolve t
- - `pr://<N>` (or `pr://<owner>/<repo>/<N>`): GitHub PR, same cache; `?comments=0` drops comments. Bare lists recent PRs; `?state=open|closed|merged|all&limit=&author=&label=`.
- - `omp://`: harness docs; AVOID unless the user asks about the harness itself.
+@@ -72,7 +72,7 @@ import { registerProjectDocSchemes } from "../internal-urls/project-docs";
+ - `pr://<N>` / `pr://<owner>/<repo>/<N>`: same cache; bare: recent; `?comments=0` `?state=open|closed|merged|all&limit=&author=&label=`.
+ - `omp://`: harness docs; AVOID unless user asks about the harness.
  {{#if projectDocsScheme}}
 -- `{{projectDocsScheme}}://`: project documentation for this repository
 +- `{{projectDocsScheme}}://`: curated documentation for THIS repository — architecture, decisions, conventions, runbooks. Before searching the tree for how this project works, read the bare `{{projectDocsScheme}}://` index, then open only the documents it names. `grep <pattern> {{projectDocsScheme}}://` searches the whole catalog.
