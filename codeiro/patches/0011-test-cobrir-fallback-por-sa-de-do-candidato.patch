@@ -1,7 +1,7 @@
 From 69cca52071a6153292285f3ffd72514f579e129c Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 08:14:41 -0300
-Subject: [PATCH 11/12] =?UTF-8?q?test:=20cobrir=20fallback=20por=20sa?=
+Subject: [PATCH 11/13] =?UTF-8?q?test:=20cobrir=20fallback=20por=20sa?=
  =?UTF-8?q?=C3=BAde=20do=20candidato?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
