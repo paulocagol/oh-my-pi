@@ -187,12 +187,11 @@ export class TurnRecovery {
 	#usageReserveApprovedSelector: string | undefined;
 	#pendingRetryErrors: PendingRetryError[] = [];
 	#usageLimitOutcomes = new WeakMap<AssistantMessage, Promise<UsageLimitOutcome>>();
+	#promptSpendUsd: number | undefined;
+	#promptHasSettledAssistant = false;
 	#emptyStopRetryCount = 0;
 	#unexpectedStopRetryCount = 0;
 	#acceptTerminalEmptyStopForPrompt = false;
-	// Three fields sit near the word "serve" and are deliberately distinct:
-	// `#activeRetryFallback.served` gates the one-shot `retry_fallback_succeeded`
-	// event for the current arm, `#fallbackRouted` says how the CURRENT model was
 	// reached, and `#lastServed` is the session's attribution. A fallback flipping
 	// to served does not by itself move attribution — only a settled turn does.
 	/**
@@ -307,12 +306,23 @@ export class TurnRecovery {
 		}
 	}
 
-	/** Resets per-prompt recovery counters and terminal-stop acceptance. */
+	/** Resets per-prompt recovery counters, budget spend, and terminal-stop acceptance. */
 	resetForNewPrompt(): void {
+		this.#promptSpendUsd = 0;
+		this.#promptHasSettledAssistant = false;
 		this.#emptyStopRetryCount = 0;
 		this.#unexpectedStopRetryCount = 0;
 		this.#acceptTerminalEmptyStopForPrompt = false;
 	}
+
+	/** Records a settled assistant cost for the current prompt budget. */
+	recordAssistantMessageCost(message: AssistantMessage): void {
+		const cost = message.usage?.cost?.total;
+		if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) return;
+		this.#promptSpendUsd = (this.#promptSpendUsd ?? 0) + cost;
+		this.#promptHasSettledAssistant = true;
+	}
+
 
 	/** Sets whether one terminal empty stop is accepted for the current prompt. */
 	setAcceptTerminalEmptyStop(accept: boolean): void {
@@ -1293,11 +1303,14 @@ export class TurnRecovery {
 		}
 		if (signal.aborted || !modelsAreEqual(this.#host.model(), currentModel)) return false;
 		const selectedAccount = health.accounts.find(account => account.selected);
-		if (health.state === "healthy") {
-			this.#usageReserveApprovedSelector = undefined;
-			if (
-				selectedAccount &&
-				selectedAccount.state !== "healthy" &&
+		const currentTurnSpendUsd = turnSpendUsd(this.#host.agent.state.messages);
+		const spendUsd =
+			this.#promptSpendUsd === undefined
+				? currentTurnSpendUsd
+				: this.#promptHasSettledAssistant
+					? Math.max(this.#promptSpendUsd, currentTurnSpendUsd)
+					: 0;
+		const budgetDecision = decideBudgetDowngrade(spendUsd, this.#host.settings.get("retry.turnBudgetUsd"));
 				health.accounts.some(account => account.state === "healthy")
 			) {
 				this.#host.modelRegistry.authStorage.releaseSessionCredentialForReselection(
@@ -1384,8 +1397,11 @@ export class TurnRecovery {
 		}
 		if (!fallback) return false;
 
-		let shouldFallback = health.state === "depleted" || reservePolicy === "auto" || !confirmer;
-		if (!shouldFallback && health.state === "reserve" && confirmer) {
+		let shouldFallback =
+			(budgetDecision.downgrade && (health.state === "healthy" || health.state === "unknown")) ||
+			health.state === "depleted" ||
+			reservePolicy === "auto" ||
+			!confirmer;
 			const remainingFraction =
 				selectedAccount?.remainingFraction ??
 				health.accounts.reduce<number | undefined>((minimum, account) => {
