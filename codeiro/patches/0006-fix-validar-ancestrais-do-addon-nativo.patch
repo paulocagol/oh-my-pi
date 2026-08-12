@@ -1,7 +1,7 @@
 From 407d45d7e3fc16f5aa93bd3ff903e68dc76f0ce8 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Tue, 11 Aug 2026 17:42:04 -0300
-Subject: [PATCH 06/14] fix: validar ancestrais do addon nativo
+Subject: [PATCH 06/15] fix: validar ancestrais do addon nativo
 
 ---
  .../src/cli/codeiro-source-update.ts          | 33 ++++++++++++++++---
