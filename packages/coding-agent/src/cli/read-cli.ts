@@ -9,6 +9,7 @@ import { getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { Settings } from "../config/settings";
 import { extractUriScheme } from "../internal-urls/parse";
+import { registerProjectDocSchemes } from "../internal-urls/project-docs";
 import { InternalUrlRouter } from "../internal-urls/router";
 import { discoverAndLoadMCPTools } from "../mcp/loader";
 import { MCPManager } from "../mcp/manager";
@@ -43,6 +44,7 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 	const cwd = getProjectDir();
 	const settings = await Settings.init({ cwd });
 
+	await registerProjectDocSchemes(cwd);
 	const session: ToolSession = {
 		cwd,
 		hasUI: false,
