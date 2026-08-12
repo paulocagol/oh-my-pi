@@ -1,4 +1,4 @@
-# base: v17.2.13
+# base: v17.2.14
 0001-feat-backend-source-build-opt-in-no-updater-via-code.patch
 0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch
 0003-fix-limpar-valida-o-do-source-updater.patch
@@ -8,3 +8,4 @@
 0007-docs-formalizar-fluxo-sustent-vel-do-fork.patch
 0008-fix-fixar-tag-base-na-valida-o-da-s-rie.patch
 0009-feat-adicionar-documenta-o-por-projeto-ao-OMP.patch
+0010-feat-permitir-assets-e-curadoria-por-exclude-no-cat-.patch

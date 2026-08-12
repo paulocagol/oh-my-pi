@@ -1,8 +1,8 @@
-From affab5636e883b12a5e1b694df9772b24fa41c80 Mon Sep 17 00:00:00 2001
+From bb409f20529fca565fe17a23f3228cf4df78b2b9 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Tue, 11 Aug 2026 21:41:38 -0300
-Subject: [PATCH 9/9] =?UTF-8?q?feat:=20adicionar=20documenta=C3=A7=C3=A3o?=
- =?UTF-8?q?=20por=20projeto=20ao=20OMP?=
+Subject: [PATCH 09/10] =?UTF-8?q?feat:=20adicionar=20documenta=C3=A7=C3=A3?=
+ =?UTF-8?q?o=20por=20projeto=20ao=20OMP?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -31,7 +31,7 @@ Content-Transfer-Encoding: 8bit
  create mode 100644 packages/coding-agent/test/tools/grep-project-docs.test.ts
 
 diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
-index a53f31baf9..8286ad40f1 100644
+index 4a84f02163..d2197bed2d 100644
 --- a/packages/coding-agent/CHANGELOG.md
 +++ b/packages/coding-agent/CHANGELOG.md
 @@ -1,6 +1,7 @@
@@ -40,7 +40,7 @@ index a53f31baf9..8286ad40f1 100644
  ## [Unreleased]
 +- Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery.
  
- ## [17.2.13] - 2026-08-11
+ ## [17.2.14] - 2026-08-11
  
 diff --git a/packages/coding-agent/src/cli/read-cli.ts b/packages/coding-agent/src/cli/read-cli.ts
 index c6fd24f389..21df4dda1b 100644
@@ -492,7 +492,7 @@ index 0f9d540266..a6a58f204d 100644
  	}
  
 diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
-index 85570d974b..75c8ecec22 100644
+index 2ea7ce62f2..4a14616039 100644
 --- a/packages/coding-agent/src/prompts/system/system-prompt.md
 +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
 @@ -70,6 +70,9 @@ Special URLs for internal resources; with most FS/bash tools they auto-resolve t
@@ -506,7 +506,7 @@ index 85570d974b..75c8ecec22 100644
  {{#if toolInfo.length}}
  {{#if toolListMode}}
 diff --git a/packages/coding-agent/src/sdk.ts b/packages/coding-agent/src/sdk.ts
-index 117d36c4c1..cbf7e100ed 100644
+index 127c2d3af0..1cf73600b5 100644
 --- a/packages/coding-agent/src/sdk.ts
 +++ b/packages/coding-agent/src/sdk.ts
 @@ -104,7 +104,12 @@ import {
