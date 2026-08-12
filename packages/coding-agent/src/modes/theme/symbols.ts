@@ -570,8 +570,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.cost": "\uf155",
 	// pick:  | alt: ◷ ◴
 	"icon.time": "\uf017",
-	// pick:  | alt: π ∏ ∑
-	"icon.pi": "\ue22c",
+	// pick:  (nf-dev-c) | alt:   C
+	"icon.pi": "\ue771",
 	// pick: 󰊠 (nf-md-ghost) | alt: 👻
 	"icon.ghost": "\u{f02a0}",
 	// pick:  | alt: 
