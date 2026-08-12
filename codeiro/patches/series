@@ -17,3 +17,4 @@
 0016-fix-rotear-URL-interna-no-subcomando-grep.patch
 0017-fix-restringir-grep-de-cat-logo-a-Markdown.patch
 0018-feat-reconhecer-install-codeiro-omp-e-rebuildar-quan.patch
+0019-fix-manter-omp-update-como-comando-do-fork.patch
