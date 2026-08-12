@@ -72,7 +72,7 @@ import { registerProjectDocSchemes } from "../internal-urls/project-docs";
 - `pr://<N>` / `pr://<owner>/<repo>/<N>`: same cache; bare: recent; `?comments=0` `?state=open|closed|merged|all&limit=&author=&label=`.
 - `omp://`: harness docs; AVOID unless user asks about the harness.
 {{#if projectDocsScheme}}
-- `{{projectDocsScheme}}://`: project documentation for this repository
+- `{{projectDocsScheme}}://`: curated documentation for THIS repository — architecture, decisions, conventions, runbooks. Before searching the tree for how this project works, read the bare `{{projectDocsScheme}}://` index, then open only the documents it names. `grep <pattern> {{projectDocsScheme}}://` searches the whole catalog.
 {{/if}}
 
 {{#if toolInfo.length}}

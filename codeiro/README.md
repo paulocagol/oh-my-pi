@@ -111,3 +111,43 @@ just omp-provision
 
 A branch `codeiro` continua sendo o espaço de desenvolvimento; a tag publicada
 é o contrato reprodutível do runtime.
+
+## Documentação por projeto
+
+O fork adiciona um esquema de URI interno por repositório, análogo ao `omp://`
+do upstream. Um projeto que tenha `.omp/project-docs.json` na raiz do
+repositório ganha `read <esquema>://`, `grep <padrão> <esquema>://` e
+autocomplete, sem que o conteúdo entre no contexto inicial: o system prompt só
+anuncia o esquema e manda ler o índice primeiro.
+
+```json
+{
+  "version": 1,
+  "scheme": "vitrine.se",
+  "root": "docs",
+  "description": "Documentação técnica, de produto e de operação do Vitrine.",
+  "exclude": ["pen/*prompt*.md"],
+  "docs": [{ "path": "index.md", "title": "Índice", "description": "Ponto de entrada." }]
+}
+```
+
+Contrato:
+
+- `version` é `1`; `scheme` casa `^[a-z][a-z0-9+.-]*$`, no máximo 64 bytes, e
+  `file`, `http`, `https` e `conflict` são reservados. Colisão com um handler já
+  registrado descarta o catálogo em vez de sobrescrevê-lo.
+- `root` é relativo à raiz do repositório e precisa resolver, por `realpath`,
+  para dentro dela. O índice é o walk do `root`, não a lista `docs`.
+- Arquivos que não terminam em `.md` são ignorados no walk e continuam
+  inalcançáveis pelo esquema: uma raiz de documentação pode carregar as imagens
+  e fontes de design que seus Markdown referenciam.
+- `exclude` são globs relativos ao `root` que tiram arquivos do índice e do
+  autocomplete. É **curadoria, não controle de acesso**: o documento excluído
+  continua legível pelo esquema e pelo `read` comum. A fronteira de segurança é
+  a contenção por `realpath`, que rejeita symlink para fora, `..`, caminho
+  absoluto e percent-encoding malformado.
+- `docs` é metadado opcional (título e descrição) para entradas do índice.
+  Apontar para arquivo inexistente, para arquivo excluído ou para algo fora do
+  `root` invalida o manifesto inteiro — falha fechada, com aviso no stderr.
+- O registro é refeito quando o `cwd` muda (CLI, SDK, ciclo de vida e modo
+  interativo), e nenhum corpo de documento é cacheado.
