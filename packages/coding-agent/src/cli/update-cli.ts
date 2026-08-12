@@ -1385,7 +1385,7 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
 				`Refusing to update: ${targetInstall.binaryPath} is a ${CODEIRO_DISTRIBUTION} install (${targetInstall.manifestPath}).`,
 			),
 		);
-		console.error(chalk.dim(`Update it through its own binary: ${targetInstall.binaryPath} update`));
+		console.error(chalk.dim("Run `omp update` from the fork-selected runtime to rebuild the patched source tree."));
 		process.exit(1);
 	}
 

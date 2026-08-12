@@ -45,10 +45,11 @@ custa uma reconstrução redundante e por isso avisa em vez de abortar.
 
 O desvio acima olha o binário **em execução**, mas o fluxo oficial escreve no
 `omp` que o PATH resolve, que pode ser outro. Antes de instalar, o updater
-oficial recusa o alvo quando há um `codeiro-omp.json` ao lado dele e manda
-rodar o update pelo próprio binário do fork. Sem essa guarda um `omp update`
-rodado a partir de um install oficial deixaria um binário sem patches por cima
-do fork, silenciosamente, já que os dois reportam a mesma versão.
+oficial recusa o alvo quando há um `codeiro-omp.json` ao lado dele e orienta
+continuar pelo comando normal `omp update`, usando o runtime forkado. Sem essa
+guarda um `omp update` rodado a partir de um install oficial deixaria um
+binário sem patches por cima do fork, silenciosamente, já que os dois reportam
+a mesma versão.
 
 ## Instalar em uma máquina
 
