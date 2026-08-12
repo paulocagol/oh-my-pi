@@ -1,19 +1,68 @@
 From 9393f02a74915a09efec6ed9addbc3f02cfd2269 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Tue, 11 Aug 2026 22:28:57 -0300
-Subject: [PATCH 10/11] =?UTF-8?q?feat:=20permitir=20assets=20e=20curadoria?=
+Subject: [PATCH 19/23] =?UTF-8?q?feat:=20permitir=20assets=20e=20curadoria?=
  =?UTF-8?q?=20por=20exclude=20no=20cat=C3=A1logo=20por=20projeto?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ codeiro/README.md                             | 40 +++++++++++++
  packages/coding-agent/CHANGELOG.md            |  2 +-
  .../internal-urls/project-docs-manifest.ts    | 56 ++++++++++++++++--
  .../src/prompts/system/system-prompt.md       |  2 +-
  .../test/project-docs-protocol.test.ts        | 57 ++++++++++++++++++-
- 4 files changed, 108 insertions(+), 9 deletions(-)
+ 5 files changed, 148 insertions(+), 9 deletions(-)
 
+diff --git a/codeiro/README.md b/codeiro/README.md
+index 9222915908..e8d3004876 100644
+--- a/codeiro/README.md
++++ b/codeiro/README.md
+@@ -111,3 +111,43 @@ just omp-provision
+ 
+ A branch `codeiro` continua sendo o espaço de desenvolvimento; a tag publicada
+ é o contrato reprodutível do runtime.
++
++## Documentação por projeto
++
++O fork adiciona um esquema de URI interno por repositório, análogo ao `omp://`
++do upstream. Um projeto que tenha `.omp/project-docs.json` na raiz do
++repositório ganha `read <esquema>://`, `grep <padrão> <esquema>://` e
++autocomplete, sem que o conteúdo entre no contexto inicial: o system prompt só
++anuncia o esquema e manda ler o índice primeiro.
++
++```json
++{
++  "version": 1,
++  "scheme": "vitrine.se",
++  "root": "docs",
++  "description": "Documentação técnica, de produto e de operação do Vitrine.",
++  "exclude": ["pen/*prompt*.md"],
++  "docs": [{ "path": "index.md", "title": "Índice", "description": "Ponto de entrada." }]
++}
++```
++
++Contrato:
++
++- `version` é `1`; `scheme` casa `^[a-z][a-z0-9+.-]*$`, no máximo 64 bytes, e
++  `file`, `http`, `https` e `conflict` são reservados. Colisão com um handler já
++  registrado descarta o catálogo em vez de sobrescrevê-lo.
++- `root` é relativo à raiz do repositório e precisa resolver, por `realpath`,
++  para dentro dela. O índice é o walk do `root`, não a lista `docs`.
++- Arquivos que não terminam em `.md` são ignorados no walk e continuam
++  inalcançáveis pelo esquema: uma raiz de documentação pode carregar as imagens
++  e fontes de design que seus Markdown referenciam.
++- `exclude` são globs relativos ao `root` que tiram arquivos do índice e do
++  autocomplete. É **curadoria, não controle de acesso**: o documento excluído
++  continua legível pelo esquema e pelo `read` comum. A fronteira de segurança é
++  a contenção por `realpath`, que rejeita symlink para fora, `..`, caminho
++  absoluto e percent-encoding malformado.
++- `docs` é metadado opcional (título e descrição) para entradas do índice.
++  Apontar para arquivo inexistente, para arquivo excluído ou para algo fora do
++  `root` invalida o manifesto inteiro — falha fechada, com aviso no stderr.
++- O registro é refeito quando o `cwd` muda (CLI, SDK, ciclo de vida e modo
++  interativo), e nenhum corpo de documento é cacheado.
 diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
 index 42379e5878..33f5a456fd 100644
 --- a/packages/coding-agent/CHANGELOG.md

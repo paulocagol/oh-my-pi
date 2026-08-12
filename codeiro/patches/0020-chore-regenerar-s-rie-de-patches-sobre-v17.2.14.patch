@@ -1,0 +1,471 @@
+From 5da1505288b756e11a18432d76bc2f356753decf Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Tue, 11 Aug 2026 22:29:17 -0300
+Subject: [PATCH 20/23] =?UTF-8?q?chore:=20regenerar=20s=C3=A9rie=20de=20pa?=
+ =?UTF-8?q?tches=20sobre=20v17.2.14?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ ...rce-build-opt-in-no-updater-via-code.patch |   4 +-
+ ...artefato-e-addon-no-update-por-fonte.patch |   4 +-
+ ...ix-limpar-valida-o-do-source-updater.patch |   6 +-
+ ...x-bloquear-traversal-no-addon-nativo.patch |   4 +-
+ ...fix-proteger-destino-do-addon-nativo.patch |   4 +-
+ ...x-validar-ancestrais-do-addon-nativo.patch |   4 +-
+ ...formalizar-fluxo-sustent-vel-do-fork.patch |   6 +-
+ ...-fixar-tag-base-na-valida-o-da-s-rie.patch |   4 +-
+ ...ionar-documenta-o-por-projeto-ao-OMP.patch |  14 +-
+ ...sets-e-curadoria-por-exclude-no-cat-.patch | 255 ++++++++++++++++++
+ codeiro/patches/series                        |   3 +-
+ 11 files changed, 282 insertions(+), 26 deletions(-)
+ create mode 100644 codeiro/patches/0010-feat-permitir-assets-e-curadoria-por-exclude-no-cat-.patch
+
+diff --git a/codeiro/patches/0001-feat-backend-source-build-opt-in-no-updater-via-code.patch b/codeiro/patches/0001-feat-backend-source-build-opt-in-no-updater-via-code.patch
+index f97202553c..cb8eb8e4ea 100644
+--- a/codeiro/patches/0001-feat-backend-source-build-opt-in-no-updater-via-code.patch
++++ b/codeiro/patches/0001-feat-backend-source-build-opt-in-no-updater-via-code.patch
+@@ -1,7 +1,7 @@
+-From 30750aa60217df568848a2d9416d6b792edb6d5c Mon Sep 17 00:00:00 2001
++From 1705fe2054d6fe68b5f577ca2a855d1edcba57e4 Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 16:30:33 -0300
+-Subject: [PATCH 1/9] feat: backend source-build opt-in no updater via
++Subject: [PATCH 01/10] feat: backend source-build opt-in no updater via
+  codeiro-omp.json
+ 
+ Sem o manifesto ao lado do binario o fluxo upstream continua identico. Com
+diff --git a/codeiro/patches/0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch b/codeiro/patches/0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch
+index 4f94943d2f..e11355e91d 100644
+--- a/codeiro/patches/0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch
++++ b/codeiro/patches/0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch
+@@ -1,7 +1,7 @@
+-From 95e49a853937c0fda60a1da5b045f18c39074d6c Mon Sep 17 00:00:00 2001
++From 4a11eadbbec7ef3f4a9c1cf54d3b7a10ef8f362f Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 17:07:39 -0300
+-Subject: [PATCH 2/9] fix: preservar artefato e addon no update por fonte
++Subject: [PATCH 02/10] fix: preservar artefato e addon no update por fonte
+ 
+ ---
+  .../src/cli/codeiro-source-update.ts          | 98 +++++++++++++++----
+diff --git a/codeiro/patches/0003-fix-limpar-valida-o-do-source-updater.patch b/codeiro/patches/0003-fix-limpar-valida-o-do-source-updater.patch
+index 8f4b394078..02cc8b60d6 100644
+--- a/codeiro/patches/0003-fix-limpar-valida-o-do-source-updater.patch
++++ b/codeiro/patches/0003-fix-limpar-valida-o-do-source-updater.patch
+@@ -1,8 +1,8 @@
+-From e16ce2d6c16bd3849d4e10fdbf4c5f7618a3ef89 Mon Sep 17 00:00:00 2001
++From afb39313012030359309e85de676c5f7e3d42612 Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 17:16:36 -0300
+-Subject: [PATCH 3/9] =?UTF-8?q?fix:=20limpar=20valida=C3=A7=C3=A3o=20do=20?=
+- =?UTF-8?q?source=20updater?=
++Subject: [PATCH 03/10] =?UTF-8?q?fix:=20limpar=20valida=C3=A7=C3=A3o=20do?=
++ =?UTF-8?q?=20source=20updater?=
+ MIME-Version: 1.0
+ Content-Type: text/plain; charset=UTF-8
+ Content-Transfer-Encoding: 8bit
+diff --git a/codeiro/patches/0004-fix-bloquear-traversal-no-addon-nativo.patch b/codeiro/patches/0004-fix-bloquear-traversal-no-addon-nativo.patch
+index 79d4dfec1d..67d35f958b 100644
+--- a/codeiro/patches/0004-fix-bloquear-traversal-no-addon-nativo.patch
++++ b/codeiro/patches/0004-fix-bloquear-traversal-no-addon-nativo.patch
+@@ -1,7 +1,7 @@
+-From de63cbd4c6a5d932c1d56f66c8b442d6e0f0b566 Mon Sep 17 00:00:00 2001
++From e6db5bbd4fcf5c245770fcf2a4cf2748d6dd0f22 Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 17:27:32 -0300
+-Subject: [PATCH 4/9] fix: bloquear traversal no addon nativo
++Subject: [PATCH 04/10] fix: bloquear traversal no addon nativo
+ 
+ ---
+  .../src/cli/codeiro-source-update.ts          | 37 ++++++++++++++++++-
+diff --git a/codeiro/patches/0005-fix-proteger-destino-do-addon-nativo.patch b/codeiro/patches/0005-fix-proteger-destino-do-addon-nativo.patch
+index 45ed67fd25..a01efe9569 100644
+--- a/codeiro/patches/0005-fix-proteger-destino-do-addon-nativo.patch
++++ b/codeiro/patches/0005-fix-proteger-destino-do-addon-nativo.patch
+@@ -1,7 +1,7 @@
+-From 393ae5292a77dd64c0d4399a6d308a42f7c1d5be Mon Sep 17 00:00:00 2001
++From 9d278062e558551d55586c26e84425f978f1de04 Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 17:33:57 -0300
+-Subject: [PATCH 5/9] fix: proteger destino do addon nativo
++Subject: [PATCH 05/10] fix: proteger destino do addon nativo
+ 
+ ---
+  .../src/cli/codeiro-source-update.ts          | 44 ++++++++++++++++++-
+diff --git a/codeiro/patches/0006-fix-validar-ancestrais-do-addon-nativo.patch b/codeiro/patches/0006-fix-validar-ancestrais-do-addon-nativo.patch
+index cc40f10025..91fd941eaf 100644
+--- a/codeiro/patches/0006-fix-validar-ancestrais-do-addon-nativo.patch
++++ b/codeiro/patches/0006-fix-validar-ancestrais-do-addon-nativo.patch
+@@ -1,7 +1,7 @@
+-From ebb9d2befab7eaab6483fafe57275e59eea3cff6 Mon Sep 17 00:00:00 2001
++From 129ba42b11e19206f98b7f67bc3d67d0598ba611 Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 17:42:04 -0300
+-Subject: [PATCH 6/9] fix: validar ancestrais do addon nativo
++Subject: [PATCH 06/10] fix: validar ancestrais do addon nativo
+ 
+ ---
+  .../src/cli/codeiro-source-update.ts          | 33 ++++++++++++++++---
+diff --git a/codeiro/patches/0007-docs-formalizar-fluxo-sustent-vel-do-fork.patch b/codeiro/patches/0007-docs-formalizar-fluxo-sustent-vel-do-fork.patch
+index 47b519c61b..f9fcda95bc 100644
+--- a/codeiro/patches/0007-docs-formalizar-fluxo-sustent-vel-do-fork.patch
++++ b/codeiro/patches/0007-docs-formalizar-fluxo-sustent-vel-do-fork.patch
+@@ -1,8 +1,8 @@
+-From 05c9cd3be5d66af6f6afe05207cfaace72adf9d5 Mon Sep 17 00:00:00 2001
++From dbbc5984992f183cf2e5bfb994776d5e513ad52d Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 18:03:16 -0300
+-Subject: [PATCH 7/9] =?UTF-8?q?docs:=20formalizar=20fluxo=20sustent=C3=A1v?=
+- =?UTF-8?q?el=20do=20fork?=
++Subject: [PATCH 07/10] =?UTF-8?q?docs:=20formalizar=20fluxo=20sustent?=
++ =?UTF-8?q?=C3=A1vel=20do=20fork?=
+ MIME-Version: 1.0
+ Content-Type: text/plain; charset=UTF-8
+ Content-Transfer-Encoding: 8bit
+diff --git a/codeiro/patches/0008-fix-fixar-tag-base-na-valida-o-da-s-rie.patch b/codeiro/patches/0008-fix-fixar-tag-base-na-valida-o-da-s-rie.patch
+index cfb434de92..434c7d409c 100644
+--- a/codeiro/patches/0008-fix-fixar-tag-base-na-valida-o-da-s-rie.patch
++++ b/codeiro/patches/0008-fix-fixar-tag-base-na-valida-o-da-s-rie.patch
+@@ -1,7 +1,7 @@
+-From dac2dd3830040f5eb187c0f7f8bf37b19add7f1c Mon Sep 17 00:00:00 2001
++From 6397193c6e2bc0f6fb8b085e86e61617c9765d4b Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 18:04:39 -0300
+-Subject: [PATCH 8/9] =?UTF-8?q?fix:=20fixar=20tag=20base=20na=20valida?=
++Subject: [PATCH 08/10] =?UTF-8?q?fix:=20fixar=20tag=20base=20na=20valida?=
+  =?UTF-8?q?=C3=A7=C3=A3o=20da=20s=C3=A9rie?=
+ MIME-Version: 1.0
+ Content-Type: text/plain; charset=UTF-8
+diff --git a/codeiro/patches/0009-feat-adicionar-documenta-o-por-projeto-ao-OMP.patch b/codeiro/patches/0009-feat-adicionar-documenta-o-por-projeto-ao-OMP.patch
+index 3fe936fc25..c29ad033cd 100644
+--- a/codeiro/patches/0009-feat-adicionar-documenta-o-por-projeto-ao-OMP.patch
++++ b/codeiro/patches/0009-feat-adicionar-documenta-o-por-projeto-ao-OMP.patch
+@@ -1,8 +1,8 @@
+-From affab5636e883b12a5e1b694df9772b24fa41c80 Mon Sep 17 00:00:00 2001
++From bb409f20529fca565fe17a23f3228cf4df78b2b9 Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 21:41:38 -0300
+-Subject: [PATCH 9/9] =?UTF-8?q?feat:=20adicionar=20documenta=C3=A7=C3=A3o?=
+- =?UTF-8?q?=20por=20projeto=20ao=20OMP?=
++Subject: [PATCH 09/10] =?UTF-8?q?feat:=20adicionar=20documenta=C3=A7=C3=A3?=
++ =?UTF-8?q?o=20por=20projeto=20ao=20OMP?=
+ MIME-Version: 1.0
+ Content-Type: text/plain; charset=UTF-8
+ Content-Transfer-Encoding: 8bit
+@@ -31,7 +31,7 @@ Content-Transfer-Encoding: 8bit
+  create mode 100644 packages/coding-agent/test/tools/grep-project-docs.test.ts
+ 
+ diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
+-index a53f31baf9..8286ad40f1 100644
++index 4a84f02163..d2197bed2d 100644
+ --- a/packages/coding-agent/CHANGELOG.md
+ +++ b/packages/coding-agent/CHANGELOG.md
+ @@ -1,6 +1,7 @@
+@@ -40,7 +40,7 @@ index a53f31baf9..8286ad40f1 100644
+  ## [Unreleased]
+ +- Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery.
+  
+- ## [17.2.13] - 2026-08-11
++ ## [17.2.14] - 2026-08-11
+  
+ diff --git a/packages/coding-agent/src/cli/read-cli.ts b/packages/coding-agent/src/cli/read-cli.ts
+ index c6fd24f389..21df4dda1b 100644
+@@ -492,7 +492,7 @@ index 0f9d540266..a6a58f204d 100644
+  	}
+  
+ diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
+-index 85570d974b..75c8ecec22 100644
++index 2ea7ce62f2..4a14616039 100644
+ --- a/packages/coding-agent/src/prompts/system/system-prompt.md
+ +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
+ @@ -70,6 +70,9 @@ Special URLs for internal resources; with most FS/bash tools they auto-resolve t
+@@ -506,7 +506,7 @@ index 85570d974b..75c8ecec22 100644
+  {{#if toolInfo.length}}
+  {{#if toolListMode}}
+ diff --git a/packages/coding-agent/src/sdk.ts b/packages/coding-agent/src/sdk.ts
+-index 117d36c4c1..cbf7e100ed 100644
++index 127c2d3af0..1cf73600b5 100644
+ --- a/packages/coding-agent/src/sdk.ts
+ +++ b/packages/coding-agent/src/sdk.ts
+ @@ -104,7 +104,12 @@ import {
+diff --git a/codeiro/patches/0010-feat-permitir-assets-e-curadoria-por-exclude-no-cat-.patch b/codeiro/patches/0010-feat-permitir-assets-e-curadoria-por-exclude-no-cat-.patch
+new file mode 100644
+index 0000000000..eb63c44d0b
+--- /dev/null
++++ b/codeiro/patches/0010-feat-permitir-assets-e-curadoria-por-exclude-no-cat-.patch
+@@ -0,0 +1,255 @@
++From c22dd61a4d348753639fddc820b7adfc52faa6ae Mon Sep 17 00:00:00 2001
++From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
++Date: Tue, 11 Aug 2026 22:28:57 -0300
++Subject: [PATCH 10/10] =?UTF-8?q?feat:=20permitir=20assets=20e=20curadoria?=
++ =?UTF-8?q?=20por=20exclude=20no=20cat=C3=A1logo=20por=20projeto?=
++MIME-Version: 1.0
++Content-Type: text/plain; charset=UTF-8
++Content-Transfer-Encoding: 8bit
++
++---
++ packages/coding-agent/CHANGELOG.md            |  2 +-
++ .../internal-urls/project-docs-manifest.ts    | 56 ++++++++++++++++--
++ .../src/prompts/system/system-prompt.md       |  2 +-
++ .../test/project-docs-protocol.test.ts        | 57 ++++++++++++++++++-
++ 4 files changed, 108 insertions(+), 9 deletions(-)
++
++diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
++index d2197bed2d..064bb2d6b4 100644
++--- a/packages/coding-agent/CHANGELOG.md
+++++ b/packages/coding-agent/CHANGELOG.md
++@@ -1,7 +1,7 @@
++ # Changelog
++ 
++ ## [Unreleased]
++-- Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery.
+++- Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery. A docs root may carry the assets its Markdown links to — non-Markdown files are skipped, never indexed, and never resolvable — and `exclude` globs curate the generated index without becoming an access-control boundary.
++ 
++ ## [17.2.14] - 2026-08-11
++ 
++diff --git a/packages/coding-agent/src/internal-urls/project-docs-manifest.ts b/packages/coding-agent/src/internal-urls/project-docs-manifest.ts
++index d9811aa546..e54b0f8475 100644
++--- a/packages/coding-agent/src/internal-urls/project-docs-manifest.ts
+++++ b/packages/coding-agent/src/internal-urls/project-docs-manifest.ts
++@@ -10,6 +10,7 @@ const SCHEME_RE = /^[a-z][a-z0-9+.-]*$/;
++ const RESERVED_SCHEMES = new Set(["file", "http", "https", "conflict"]);
++ const MAX_LABEL_LENGTH = 256;
++ const MAX_PATH_LENGTH = 1024;
+++const MAX_EXCLUDE_PATTERNS = 64;
++ 
++ export interface ProjectDocMetadata {
++ 	path: string;
++@@ -22,6 +23,13 @@ export interface ProjectDocsManifest {
++ 	scheme: string;
++ 	root: string;
++ 	description?: string;
+++	/**
+++	 * Globs, relative to `root`, whose matches stay out of the generated index and
+++	 * autocomplete. Curation only — excluded files remain readable through the
+++	 * scheme and through plain `read`; containment and symlink checks are the
+++	 * actual security boundary.
+++	 */
+++	exclude: string[];
++ 	docs: ProjectDocMetadata[];
++ 	repoRoot: string;
++ 	realRoot: string;
++@@ -60,6 +68,31 @@ function validateRelative(value: string, field: string): string {
++ 	return normalized;
++ }
++ 
+++/**
+++ * Parses `exclude`: globs, relative to the docs root, that keep matching files out
+++ * of the generated index. Patterns are validated as root-relative paths so a glob
+++ * can never reach above the root, and compiled eagerly so a malformed pattern is a
+++ * manifest error instead of a silent no-op at walk time. Absent means no exclusion,
+++ * which keeps every manifest written before this field valid.
+++ */
+++function validateExclude(value: unknown): string[] {
+++	if (value === undefined) return [];
+++	if (!Array.isArray(value)) throw new Error("exclude must be an array");
+++	if (value.length > MAX_EXCLUDE_PATTERNS) throw new Error(`exclude exceeds ${MAX_EXCLUDE_PATTERNS} patterns`);
+++	const patterns: string[] = [];
+++	for (const entry of value) {
+++		if (typeof entry !== "string") throw new Error("exclude patterns must be strings");
+++		const pattern = validateRelative(entry, "exclude pattern");
+++		try {
+++			new Bun.Glob(pattern);
+++		} catch (error) {
+++			throw new Error(`exclude pattern is not a valid glob: ${pattern} (${String(error)})`);
+++		}
+++		patterns.push(pattern);
+++	}
+++	return patterns;
+++}
+++
++ async function realPathIfExists(target: string): Promise<string | null> {
++ 	try {
++ 		return await fs.realpath(target);
++@@ -82,9 +115,15 @@ async function readManifestFile(manifestPath: string): Promise<unknown> {
++ 	}
++ }
++ 
++-async function enumerateMarkdownFiles(realRoot: string): Promise<string[]> {
+++async function enumerateMarkdownFiles(realRoot: string, exclude: readonly string[] = []): Promise<string[]> {
++ 	const files: string[] = [];
++ 	const visited = new Set<string>();
+++	const matchers = exclude.map(pattern => new Bun.Glob(pattern));
+++	const isExcluded = (realFile: string): boolean => {
+++		if (matchers.length === 0) return false;
+++		const relative = path.relative(realRoot, realFile).split(path.sep).join("/");
+++		return matchers.some(matcher => matcher.match(relative));
+++	};
++ 	const walk = async (directory: string): Promise<void> => {
++ 		const realDirectory = await realPathIfExists(directory);
++ 		if (!realDirectory || visited.has(realDirectory)) return;
++@@ -108,10 +147,14 @@ async function enumerateMarkdownFiles(realRoot: string): Promise<string[]> {
++ 			const stat = await fs.stat(realCandidate);
++ 			if (stat.isDirectory()) await walk(realCandidate);
++ 			else if (stat.isFile()) {
+++				// A docs root is allowed to carry the assets its Markdown links to
+++				// (images, design sources). They are skipped, never indexed, and never
+++				// resolvable — only `.md` names reach the generated index.
+++				if (!entry.name.endsWith(".md")) continue;
++ 				if (/[\u0000-\u001f\u007f]/u.test(entry.name)) {
++ 					throw new Error(`docs root contains control character in filename: ${entry.name}`);
++ 				}
++-				if (!entry.name.endsWith(".md")) throw new Error(`docs root contains non-Markdown file: ${entry.name}`);
+++				if (isExcluded(realCandidate)) continue;
++ 				files.push(realCandidate);
++ 			}
++ 		}
++@@ -145,6 +188,7 @@ export async function loadProjectDocsManifest(cwd: string = getProjectDir()): Pr
++ 		if (RESERVED_SCHEMES.has(scheme)) throw new Error(`scheme ${scheme} is reserved`);
++ 		const root = validateRelative(typeof record.root === "undefined" ? "docs" : String(record.root), "root");
++ 		if (record.root !== undefined && typeof record.root !== "string") throw new Error("root must be a string");
+++		const exclude = validateExclude(record.exclude);
++ 		const rawDocs = record.docs === undefined ? [] : record.docs;
++ 		if (!Array.isArray(rawDocs)) throw new Error("docs must be an array");
++ 		const rootCandidate = path.resolve(realRepoRoot, root);
++@@ -154,14 +198,17 @@ export async function loadProjectDocsManifest(cwd: string = getProjectDir()): Pr
++ 		if (rootContained.status !== "ok") throw new Error("root resolves outside repository");
++ 		const rootStat = await fs.stat(realRoot);
++ 		if (!rootStat.isDirectory()) throw new Error("root must be a directory");
++-		const files = await enumerateMarkdownFiles(realRoot);
+++		const files = await enumerateMarkdownFiles(realRoot, exclude);
++ 		const fileSet = new Set(files.map(file => path.relative(realRoot, file).split(path.sep).join("/")));
++ 		const docs: ProjectDocMetadata[] = [];
+++		const excludeMatchers = exclude.map(pattern => new Bun.Glob(pattern));
++ 		for (const item of rawDocs) {
++ 			if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("docs entries must be objects");
++ 			const doc = item as Record<string, unknown>;
++ 			if (typeof doc.path !== "string") throw new Error("docs entry path must be a string");
++ 			const relativePath = validateRelative(doc.path, "docs entry path");
+++			if (excludeMatchers.some(matcher => matcher.match(relativePath)))
+++				throw new Error(`docs entry is excluded by an exclude pattern: ${relativePath}`);
++ 			if (!relativePath.endsWith(".md") || !fileSet.has(relativePath))
++ 				throw new Error(`docs entry does not exist: ${relativePath}`);
++ 			const title = sanitizeText(doc.title, "title");
++@@ -178,6 +225,7 @@ export async function loadProjectDocsManifest(cwd: string = getProjectDir()): Pr
++ 			scheme,
++ 			root,
++ 			...(description === undefined ? {} : { description }),
+++			exclude,
++ 			docs,
++ 			repoRoot: realRepoRoot,
++ 			realRoot,
++@@ -189,7 +237,7 @@ export async function loadProjectDocsManifest(cwd: string = getProjectDir()): Pr
++ }
++ 
++ export async function listProjectDocsFiles(manifest: ProjectDocsManifest): Promise<string[]> {
++-	return enumerateMarkdownFiles(manifest.realRoot);
+++	return enumerateMarkdownFiles(manifest.realRoot, manifest.exclude);
++ }
++ 
++ export function projectDocsManifestPath(repoRoot: string): string {
++diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
++index 4a14616039..0227c42243 100644
++--- a/packages/coding-agent/src/prompts/system/system-prompt.md
+++++ b/packages/coding-agent/src/prompts/system/system-prompt.md
++@@ -71,7 +71,7 @@ Special URLs for internal resources; with most FS/bash tools they auto-resolve t
++ - `pr://<N>` (or `pr://<owner>/<repo>/<N>`): GitHub PR, same cache; `?comments=0` drops comments. Bare lists recent PRs; `?state=open|closed|merged|all&limit=&author=&label=`.
++ - `omp://`: harness docs; AVOID unless the user asks about the harness itself.
++ {{#if projectDocsScheme}}
++-- `{{projectDocsScheme}}://`: project documentation for this repository
+++- `{{projectDocsScheme}}://`: curated documentation for THIS repository — architecture, decisions, conventions, runbooks. Before searching the tree for how this project works, read the bare `{{projectDocsScheme}}://` index, then open only the documents it names. `grep <pattern> {{projectDocsScheme}}://` searches the whole catalog.
++ {{/if}}
++ 
++ {{#if toolInfo.length}}
++diff --git a/packages/coding-agent/test/project-docs-protocol.test.ts b/packages/coding-agent/test/project-docs-protocol.test.ts
++index 3db20454c0..c8284b694d 100644
++--- a/packages/coding-agent/test/project-docs-protocol.test.ts
+++++ b/packages/coding-agent/test/project-docs-protocol.test.ts
++@@ -86,9 +86,7 @@ describe("project-docs protocol", () => {
++ 			/not found|outside|unavailable/,
++ 		);
++ 	});
++-	it("rejects invalid manifests, non-Markdown trees, and collisions", async () => {
++-		const root = await project("docsvalid");
++-		await Bun.write(path.join(root, "docs", "bad.txt"), "bad\n");
+++	it("rejects invalid manifests and scheme collisions", async () => {
++ 		const other = await project("file");
++ 		expect(await registerProjectDocSchemes(other)).toBeUndefined();
++ 		const collision = await project("conflict");
++@@ -106,6 +104,59 @@ describe("project-docs protocol", () => {
++ 		expect(await registerProjectDocSchemes(taken)).toBeUndefined();
++ 	});
++ 
+++	it("skips non-Markdown assets, honors exclude globs, and keeps exclusion out of access control", async () => {
+++		const root = await project();
+++		await Bun.write(path.join(root, "docs", "architecture.md"), "# Architecture\n");
+++		await Bun.write(path.join(root, "docs", "nested", "guide.md"), "# Guide\n");
+++		await fs.mkdir(path.join(root, "docs", "pen"), { recursive: true });
+++		await Bun.write(path.join(root, "docs", "pen", "draft.md"), "# Draft\n");
+++		await Bun.write(path.join(root, "docs", "pen", "flow.js"), "// asset\n");
+++		await Bun.write(path.join(root, "docs", "logo.png"), "not markdown\n");
+++		await manifest(root, {
+++			version: 1,
+++			scheme: "vitrine.se",
+++			root: "docs",
+++			exclude: ["pen/**"],
+++			docs: [{ path: "architecture.md", title: "Arquitetura" }],
+++		});
+++		expect(await registerProjectDocSchemes(root)).toBeDefined();
+++		const handler = InternalUrlRouter.instance().getHandler("vitrine.se")!;
+++		const index = await handler.resolve(url("vitrine.se://"), { cwd: root });
+++		expect(index.content).toContain("architecture.md");
+++		expect(index.content).toContain("nested/guide.md");
+++		// Assets never reach the index, and `exclude` curates it further.
+++		expect(index.content).not.toContain("logo.png");
+++		expect(index.content).not.toContain("flow.js");
+++		expect(index.content).not.toContain("draft.md");
+++		const completions = await handler.complete?.(undefined, { cwd: root });
+++		expect(completions?.map(entry => entry.value).sort()).toEqual(["architecture.md", "nested/guide.md"]);
+++		// Curation, not access control: an excluded document still resolves.
+++		expect((await handler.resolve(url("vitrine.se://pen/draft.md"), { cwd: root })).content).toBe("# Draft\n");
+++		// Assets stay unreachable through the scheme regardless of the walk.
+++		await expect(handler.resolve(url("vitrine.se://logo.png"), { cwd: root })).rejects.toThrow(/\.md|unavailable/);
+++	});
+++
+++	it("fails closed on malformed exclude patterns and on metadata for excluded documents", async () => {
+++		const root = await project("excl");
+++		await Bun.write(path.join(root, "docs", "keep.md"), "# Keep\n");
+++		await fs.mkdir(path.join(root, "docs", "drafts"), { recursive: true });
+++		await Bun.write(path.join(root, "docs", "drafts", "wip.md"), "# WIP\n");
+++		const base = { version: 1, scheme: "excl", root: "docs" };
+++		await manifest(root, { ...base, exclude: "drafts/**" });
+++		expect(await registerProjectDocSchemes(root)).toBeUndefined();
+++		await manifest(root, { ...base, exclude: [42] });
+++		expect(await registerProjectDocSchemes(root)).toBeUndefined();
+++		await manifest(root, { ...base, exclude: ["../outside/**"] });
+++		expect(await registerProjectDocSchemes(root)).toBeUndefined();
+++		await manifest(root, { ...base, exclude: ["/abs/**"] });
+++		expect(await registerProjectDocSchemes(root)).toBeUndefined();
+++		// Listing a document the manifest itself excluded is an authoring bug, not a silent drop.
+++		await manifest(root, { ...base, exclude: ["drafts/**"], docs: [{ path: "drafts/wip.md" }] });
+++		expect(await registerProjectDocSchemes(root)).toBeUndefined();
+++		await manifest(root, { ...base, exclude: ["drafts/**"], docs: [{ path: "keep.md" }] });
+++		expect(await registerProjectDocSchemes(root)).toBeDefined();
+++	});
+++
++ 	it("isolates same schemes by context and fails closed for mismatch or absent manifests", async () => {
++ 		const first = await project("shared");
++ 		const second = await project("shared");
++-- 
++2.55.0
++
+diff --git a/codeiro/patches/series b/codeiro/patches/series
+index 19f5570611..2d7179e52a 100644
+--- a/codeiro/patches/series
++++ b/codeiro/patches/series
+@@ -1,4 +1,4 @@
+-# base: v17.2.13
++# base: v17.2.14
+ 0001-feat-backend-source-build-opt-in-no-updater-via-code.patch
+ 0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch
+ 0003-fix-limpar-valida-o-do-source-updater.patch
+@@ -8,3 +8,4 @@
+ 0007-docs-formalizar-fluxo-sustent-vel-do-fork.patch
+ 0008-fix-fixar-tag-base-na-valida-o-da-s-rie.patch
+ 0009-feat-adicionar-documenta-o-por-projeto-ao-OMP.patch
++0010-feat-permitir-assets-e-curadoria-por-exclude-no-cat-.patch
+-- 
+2.55.0
+

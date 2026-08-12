@@ -1,0 +1,1122 @@
+From 5f7edcc76ac7611405aca283c8f3a7221d9d4074 Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Tue, 11 Aug 2026 21:42:40 -0300
+Subject: [PATCH 18/23] =?UTF-8?q?chore:=20regenerar=20s=C3=A9rie=20de=20pa?=
+ =?UTF-8?q?tches=20do=20fork?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ ...rce-build-opt-in-no-updater-via-code.patch |   2 +-
+ ...artefato-e-addon-no-update-por-fonte.patch |   2 +-
+ ...ix-limpar-valida-o-do-source-updater.patch |   2 +-
+ ...x-bloquear-traversal-no-addon-nativo.patch |   2 +-
+ ...fix-proteger-destino-do-addon-nativo.patch |   2 +-
+ ...x-validar-ancestrais-do-addon-nativo.patch |   2 +-
+ ...formalizar-fluxo-sustent-vel-do-fork.patch |  65 ++
+ ...-fixar-tag-base-na-valida-o-da-s-rie.patch |  33 +
+ ...ionar-documenta-o-por-projeto-ao-OMP.patch | 889 ++++++++++++++++++
+ codeiro/patches/series                        |   3 +
+ 10 files changed, 996 insertions(+), 6 deletions(-)
+ create mode 100644 codeiro/patches/0007-docs-formalizar-fluxo-sustent-vel-do-fork.patch
+ create mode 100644 codeiro/patches/0008-fix-fixar-tag-base-na-valida-o-da-s-rie.patch
+ create mode 100644 codeiro/patches/0009-feat-adicionar-documenta-o-por-projeto-ao-OMP.patch
+
+diff --git a/codeiro/patches/0001-feat-backend-source-build-opt-in-no-updater-via-code.patch b/codeiro/patches/0001-feat-backend-source-build-opt-in-no-updater-via-code.patch
+index 71aae34040..f97202553c 100644
+--- a/codeiro/patches/0001-feat-backend-source-build-opt-in-no-updater-via-code.patch
++++ b/codeiro/patches/0001-feat-backend-source-build-opt-in-no-updater-via-code.patch
+@@ -1,7 +1,7 @@
+ From 30750aa60217df568848a2d9416d6b792edb6d5c Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 16:30:33 -0300
+-Subject: [PATCH 1/6] feat: backend source-build opt-in no updater via
++Subject: [PATCH 1/9] feat: backend source-build opt-in no updater via
+  codeiro-omp.json
+ 
+ Sem o manifesto ao lado do binario o fluxo upstream continua identico. Com
+diff --git a/codeiro/patches/0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch b/codeiro/patches/0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch
+index 5ce0bb25d5..4f94943d2f 100644
+--- a/codeiro/patches/0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch
++++ b/codeiro/patches/0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch
+@@ -1,7 +1,7 @@
+ From 95e49a853937c0fda60a1da5b045f18c39074d6c Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 17:07:39 -0300
+-Subject: [PATCH 2/6] fix: preservar artefato e addon no update por fonte
++Subject: [PATCH 2/9] fix: preservar artefato e addon no update por fonte
+ 
+ ---
+  .../src/cli/codeiro-source-update.ts          | 98 +++++++++++++++----
+diff --git a/codeiro/patches/0003-fix-limpar-valida-o-do-source-updater.patch b/codeiro/patches/0003-fix-limpar-valida-o-do-source-updater.patch
+index 3b7434022f..8f4b394078 100644
+--- a/codeiro/patches/0003-fix-limpar-valida-o-do-source-updater.patch
++++ b/codeiro/patches/0003-fix-limpar-valida-o-do-source-updater.patch
+@@ -1,7 +1,7 @@
+ From e16ce2d6c16bd3849d4e10fdbf4c5f7618a3ef89 Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 17:16:36 -0300
+-Subject: [PATCH 3/6] =?UTF-8?q?fix:=20limpar=20valida=C3=A7=C3=A3o=20do=20?=
++Subject: [PATCH 3/9] =?UTF-8?q?fix:=20limpar=20valida=C3=A7=C3=A3o=20do=20?=
+  =?UTF-8?q?source=20updater?=
+ MIME-Version: 1.0
+ Content-Type: text/plain; charset=UTF-8
+diff --git a/codeiro/patches/0004-fix-bloquear-traversal-no-addon-nativo.patch b/codeiro/patches/0004-fix-bloquear-traversal-no-addon-nativo.patch
+index e1bc65128f..79d4dfec1d 100644
+--- a/codeiro/patches/0004-fix-bloquear-traversal-no-addon-nativo.patch
++++ b/codeiro/patches/0004-fix-bloquear-traversal-no-addon-nativo.patch
+@@ -1,7 +1,7 @@
+ From de63cbd4c6a5d932c1d56f66c8b442d6e0f0b566 Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 17:27:32 -0300
+-Subject: [PATCH 4/6] fix: bloquear traversal no addon nativo
++Subject: [PATCH 4/9] fix: bloquear traversal no addon nativo
+ 
+ ---
+  .../src/cli/codeiro-source-update.ts          | 37 ++++++++++++++++++-
+diff --git a/codeiro/patches/0005-fix-proteger-destino-do-addon-nativo.patch b/codeiro/patches/0005-fix-proteger-destino-do-addon-nativo.patch
+index 2a62f81f0e..45ed67fd25 100644
+--- a/codeiro/patches/0005-fix-proteger-destino-do-addon-nativo.patch
++++ b/codeiro/patches/0005-fix-proteger-destino-do-addon-nativo.patch
+@@ -1,7 +1,7 @@
+ From 393ae5292a77dd64c0d4399a6d308a42f7c1d5be Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 17:33:57 -0300
+-Subject: [PATCH 5/6] fix: proteger destino do addon nativo
++Subject: [PATCH 5/9] fix: proteger destino do addon nativo
+ 
+ ---
+  .../src/cli/codeiro-source-update.ts          | 44 ++++++++++++++++++-
+diff --git a/codeiro/patches/0006-fix-validar-ancestrais-do-addon-nativo.patch b/codeiro/patches/0006-fix-validar-ancestrais-do-addon-nativo.patch
+index 7f080c1ae6..cc40f10025 100644
+--- a/codeiro/patches/0006-fix-validar-ancestrais-do-addon-nativo.patch
++++ b/codeiro/patches/0006-fix-validar-ancestrais-do-addon-nativo.patch
+@@ -1,7 +1,7 @@
+ From ebb9d2befab7eaab6483fafe57275e59eea3cff6 Mon Sep 17 00:00:00 2001
+ From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+ Date: Tue, 11 Aug 2026 17:42:04 -0300
+-Subject: [PATCH 6/6] fix: validar ancestrais do addon nativo
++Subject: [PATCH 6/9] fix: validar ancestrais do addon nativo
+ 
+ ---
+  .../src/cli/codeiro-source-update.ts          | 33 ++++++++++++++++---
+diff --git a/codeiro/patches/0007-docs-formalizar-fluxo-sustent-vel-do-fork.patch b/codeiro/patches/0007-docs-formalizar-fluxo-sustent-vel-do-fork.patch
+new file mode 100644
+index 0000000000..47b519c61b
+--- /dev/null
++++ b/codeiro/patches/0007-docs-formalizar-fluxo-sustent-vel-do-fork.patch
+@@ -0,0 +1,65 @@
++From 05c9cd3be5d66af6f6afe05207cfaace72adf9d5 Mon Sep 17 00:00:00 2001
++From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
++Date: Tue, 11 Aug 2026 18:03:16 -0300
++Subject: [PATCH 7/9] =?UTF-8?q?docs:=20formalizar=20fluxo=20sustent=C3=A1v?=
++ =?UTF-8?q?el=20do=20fork?=
++MIME-Version: 1.0
++Content-Type: text/plain; charset=UTF-8
++Content-Transfer-Encoding: 8bit
++
++---
++ .github/workflows/codeiro-patch-series.yml | 42 ++++++++++++++++++++++
++ 1 file changed, 42 insertions(+)
++ create mode 100644 .github/workflows/codeiro-patch-series.yml
++
++diff --git a/.github/workflows/codeiro-patch-series.yml b/.github/workflows/codeiro-patch-series.yml
++new file mode 100644
++index 0000000000..1374c549ea
++--- /dev/null
+++++ b/.github/workflows/codeiro-patch-series.yml
++@@ -0,0 +1,42 @@
+++name: Codeiro patch series
+++
+++on:
+++  push:
+++    branches: [codeiro]
+++    paths:
+++      - "codeiro/**"
+++      - "packages/**"
+++      - ".github/workflows/codeiro-patch-series.yml"
+++  workflow_dispatch:
+++
+++permissions:
+++  contents: read
+++
+++jobs:
+++  apply-series:
+++    name: Aplicar patches na tag base
+++    runs-on: ubuntu-latest
+++    steps:
+++      - name: Checkout completo
+++        uses: actions/checkout@v4
+++        with:
+++          fetch-depth: 0
+++
+++      - name: Validar aplicação ordenada da série
+++        shell: bash
+++        run: |
+++          set -euo pipefail
+++
+++          base_tag="$(git describe --tags --abbrev=0 HEAD^)"
+++          staging="$(mktemp -d)"
+++          trap 'rm -rf "${staging}"' EXIT
+++
+++          git archive "${base_tag}" | tar -x -C "${staging}"
+++          while IFS= read -r patch || [ -n "${patch}" ]; do
+++            case "${patch}" in
+++              ""|\#*) continue ;;
+++            esac
+++            patch_path="${GITHUB_WORKSPACE}/codeiro/patches/${patch}"
+++            git -C "${staging}" apply --check "${patch_path}"
+++            git -C "${staging}" apply "${patch_path}"
+++          done < "${GITHUB_WORKSPACE}/codeiro/patches/series"
++-- 
++2.55.0
++
+diff --git a/codeiro/patches/0008-fix-fixar-tag-base-na-valida-o-da-s-rie.patch b/codeiro/patches/0008-fix-fixar-tag-base-na-valida-o-da-s-rie.patch
+new file mode 100644
+index 0000000000..cfb434de92
+--- /dev/null
++++ b/codeiro/patches/0008-fix-fixar-tag-base-na-valida-o-da-s-rie.patch
+@@ -0,0 +1,33 @@
++From dac2dd3830040f5eb187c0f7f8bf37b19add7f1c Mon Sep 17 00:00:00 2001
++From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
++Date: Tue, 11 Aug 2026 18:04:39 -0300
++Subject: [PATCH 8/9] =?UTF-8?q?fix:=20fixar=20tag=20base=20na=20valida?=
++ =?UTF-8?q?=C3=A7=C3=A3o=20da=20s=C3=A9rie?=
++MIME-Version: 1.0
++Content-Type: text/plain; charset=UTF-8
++Content-Transfer-Encoding: 8bit
++
++---
++ .github/workflows/codeiro-patch-series.yml | 6 +++++-
++ 1 file changed, 5 insertions(+), 1 deletion(-)
++
++diff --git a/.github/workflows/codeiro-patch-series.yml b/.github/workflows/codeiro-patch-series.yml
++index 1374c549ea..8ec16fc776 100644
++--- a/.github/workflows/codeiro-patch-series.yml
+++++ b/.github/workflows/codeiro-patch-series.yml
++@@ -27,7 +27,11 @@ jobs:
++         run: |
++           set -euo pipefail
++ 
++-          base_tag="$(git describe --tags --abbrev=0 HEAD^)"
+++          series="${GITHUB_WORKSPACE}/codeiro/patches/series"
+++          base_tag="$(sed -n 's/^# base: //p' "${series}")"
+++          test -n "${base_tag}"
+++          git rev-parse --verify "refs/tags/${base_tag}^{commit}" >/dev/null
+++
++           staging="$(mktemp -d)"
++           trap 'rm -rf "${staging}"' EXIT
++ 
++-- 
++2.55.0
++
+diff --git a/codeiro/patches/0009-feat-adicionar-documenta-o-por-projeto-ao-OMP.patch b/codeiro/patches/0009-feat-adicionar-documenta-o-por-projeto-ao-OMP.patch
+new file mode 100644
+index 0000000000..3fe936fc25
+--- /dev/null
++++ b/codeiro/patches/0009-feat-adicionar-documenta-o-por-projeto-ao-OMP.patch
+@@ -0,0 +1,889 @@
++From affab5636e883b12a5e1b694df9772b24fa41c80 Mon Sep 17 00:00:00 2001
++From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
++Date: Tue, 11 Aug 2026 21:41:38 -0300
++Subject: [PATCH 9/9] =?UTF-8?q?feat:=20adicionar=20documenta=C3=A7=C3=A3o?=
++ =?UTF-8?q?=20por=20projeto=20ao=20OMP?=
++MIME-Version: 1.0
++Content-Type: text/plain; charset=UTF-8
++Content-Transfer-Encoding: 8bit
++
++---
++ packages/coding-agent/CHANGELOG.md            |   1 +
++ packages/coding-agent/src/cli/read-cli.ts     |   2 +
++ .../coding-agent/src/internal-urls/index.ts   |   1 +
++ .../internal-urls/project-docs-manifest.ts    | 201 ++++++++++++++++++
++ .../internal-urls/project-docs-protocol.ts    | 128 +++++++++++
++ .../src/internal-urls/project-docs.ts         |  30 +++
++ packages/coding-agent/src/main.ts             |   2 +
++ .../src/modes/interactive-mode.ts             |   2 +
++ .../src/prompts/system/system-prompt.md       |   3 +
++ packages/coding-agent/src/sdk.ts              |  10 +-
++ .../src/slash-commands/builtin-lifecycle.ts   |   2 +
++ packages/coding-agent/src/system-prompt.ts    |   4 +
++ packages/coding-agent/src/tools/path-utils.ts |  21 +-
++ .../test/project-docs-protocol.test.ts        | 171 +++++++++++++++
++ .../test/tools/grep-project-docs.test.ts      |  52 +++++
++ 15 files changed, 626 insertions(+), 4 deletions(-)
++ create mode 100644 packages/coding-agent/src/internal-urls/project-docs-manifest.ts
++ create mode 100644 packages/coding-agent/src/internal-urls/project-docs-protocol.ts
++ create mode 100644 packages/coding-agent/src/internal-urls/project-docs.ts
++ create mode 100644 packages/coding-agent/test/project-docs-protocol.test.ts
++ create mode 100644 packages/coding-agent/test/tools/grep-project-docs.test.ts
++
++diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
++index a53f31baf9..8286ad40f1 100644
++--- a/packages/coding-agent/CHANGELOG.md
+++++ b/packages/coding-agent/CHANGELOG.md
++@@ -1,6 +1,7 @@
++ # Changelog
++ 
++ ## [Unreleased]
+++- Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery.
++ 
++ ## [17.2.13] - 2026-08-11
++ 
++diff --git a/packages/coding-agent/src/cli/read-cli.ts b/packages/coding-agent/src/cli/read-cli.ts
++index c6fd24f389..21df4dda1b 100644
++--- a/packages/coding-agent/src/cli/read-cli.ts
+++++ b/packages/coding-agent/src/cli/read-cli.ts
++@@ -9,6 +9,7 @@ import { getProjectDir } from "@oh-my-pi/pi-utils";
++ import chalk from "@oh-my-pi/pi-utils/chalk";
++ import { Settings } from "../config/settings";
++ import { extractUriScheme } from "../internal-urls/parse";
+++import { registerProjectDocSchemes } from "../internal-urls/project-docs";
++ import { InternalUrlRouter } from "../internal-urls/router";
++ import { discoverAndLoadMCPTools } from "../mcp/loader";
++ import { MCPManager } from "../mcp/manager";
++@@ -43,6 +44,7 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
++ 	const cwd = getProjectDir();
++ 	const settings = await Settings.init({ cwd });
++ 
+++	await registerProjectDocSchemes(cwd);
++ 	const session: ToolSession = {
++ 		cwd,
++ 		hasUI: false,
++diff --git a/packages/coding-agent/src/internal-urls/index.ts b/packages/coding-agent/src/internal-urls/index.ts
++index 6b52fb2198..2aab1cfea2 100644
++--- a/packages/coding-agent/src/internal-urls/index.ts
+++++ b/packages/coding-agent/src/internal-urls/index.ts
++@@ -18,6 +18,7 @@ export * from "./mcp-protocol";
++ export * from "./memory-protocol";
++ export * from "./omp-protocol";
++ export * from "./parse";
+++export * from "./project-docs";
++ export * from "./router";
++ export * from "./rule-protocol";
++ export * from "./security-protocol";
++diff --git a/packages/coding-agent/src/internal-urls/project-docs-manifest.ts b/packages/coding-agent/src/internal-urls/project-docs-manifest.ts
++new file mode 100644
++index 0000000000..d9811aa546
++--- /dev/null
+++++ b/packages/coding-agent/src/internal-urls/project-docs-manifest.ts
++@@ -0,0 +1,201 @@
+++import type { Dirent } from "node:fs";
+++import * as fs from "node:fs/promises";
+++import * as path from "node:path";
+++import { getProjectDir } from "@oh-my-pi/pi-utils";
+++import { findRepoRoot } from "../capability/fs";
+++import { resolveContainedPath } from "../discovery/contained-path";
+++
+++const MANIFEST_RELATIVE_PATH = path.join(".omp", "project-docs.json");
+++const SCHEME_RE = /^[a-z][a-z0-9+.-]*$/;
+++const RESERVED_SCHEMES = new Set(["file", "http", "https", "conflict"]);
+++const MAX_LABEL_LENGTH = 256;
+++const MAX_PATH_LENGTH = 1024;
+++
+++export interface ProjectDocMetadata {
+++	path: string;
+++	title?: string;
+++	description?: string;
+++}
+++
+++export interface ProjectDocsManifest {
+++	version: 1;
+++	scheme: string;
+++	root: string;
+++	description?: string;
+++	docs: ProjectDocMetadata[];
+++	repoRoot: string;
+++	realRoot: string;
+++}
+++
+++function warn(message: string): void {
+++	console.warn(`[project-docs] ${message}`);
+++}
+++
+++function sanitizeText(value: unknown, field: string): string | undefined {
+++	if (value === undefined) return undefined;
+++	if (typeof value !== "string") throw new Error(`${field} must be a string`);
+++	const trimmed = value
+++		.replace(/[\p{Cc}\p{Cf}]/gu, " ")
+++		.replace(/[<>`]/g, "")
+++		.trim();
+++	if (trimmed.length > MAX_LABEL_LENGTH) throw new Error(`${field} exceeds ${MAX_LABEL_LENGTH} characters`);
+++	return trimmed;
+++}
+++
+++function validateRelative(value: string, field: string): string {
+++	if (
+++		!value ||
+++		value.length > MAX_PATH_LENGTH ||
+++		value.includes("\0") ||
+++		path.posix.isAbsolute(value) ||
+++		path.win32.isAbsolute(value)
+++	) {
+++		throw new Error(`${field} must be a relative path`);
+++	}
+++	const normalized = value.replaceAll("\\", "/");
+++	const parts = normalized.split("/");
+++	if (parts.some(part => part === ".." || (part === "" && parts.length > 1))) {
+++		throw new Error(`${field} must not escape its root`);
+++	}
+++	return normalized;
+++}
+++
+++async function realPathIfExists(target: string): Promise<string | null> {
+++	try {
+++		return await fs.realpath(target);
+++	} catch {
+++		return null;
+++	}
+++}
+++
+++async function readManifestFile(manifestPath: string): Promise<unknown> {
+++	try {
+++		const stat = await fs.stat(manifestPath);
+++		if (!stat.isFile()) return undefined;
+++		const bytes = await fs.readFile(manifestPath);
+++		return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+++	} catch (error) {
+++		if (error instanceof SyntaxError) throw new Error(`invalid JSON: ${error.message}`);
+++		if (error instanceof TypeError) throw new Error("manifest is not valid UTF-8");
+++		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+++		throw new Error(`cannot read manifest: ${String(error)}`);
+++	}
+++}
+++
+++async function enumerateMarkdownFiles(realRoot: string): Promise<string[]> {
+++	const files: string[] = [];
+++	const visited = new Set<string>();
+++	const walk = async (directory: string): Promise<void> => {
+++		const realDirectory = await realPathIfExists(directory);
+++		if (!realDirectory || visited.has(realDirectory)) return;
+++		const containedDirectory = await resolveContainedPath(realRoot, realDirectory);
+++		if (containedDirectory.status !== "ok")
+++			throw new Error("docs root contains a symlink outside the repository docs root");
+++		visited.add(realDirectory);
+++		let entries: Dirent[];
+++		try {
+++			entries = await fs.readdir(realDirectory, { withFileTypes: true });
+++		} catch (error) {
+++			throw new Error(`cannot enumerate docs root: ${String(error)}`);
+++		}
+++		for (const entry of entries) {
+++			const candidate = path.join(realDirectory, entry.name);
+++			const realCandidate = await realPathIfExists(candidate);
+++			if (!realCandidate) continue;
+++			const contained = await resolveContainedPath(realRoot, realCandidate);
+++			if (contained.status === "outside") throw new Error(`docs entry resolves outside root: ${entry.name}`);
+++			if (contained.status !== "ok") continue;
+++			const stat = await fs.stat(realCandidate);
+++			if (stat.isDirectory()) await walk(realCandidate);
+++			else if (stat.isFile()) {
+++				if (/[\u0000-\u001f\u007f]/u.test(entry.name)) {
+++					throw new Error(`docs root contains control character in filename: ${entry.name}`);
+++				}
+++				if (!entry.name.endsWith(".md")) throw new Error(`docs root contains non-Markdown file: ${entry.name}`);
+++				files.push(realCandidate);
+++			}
+++		}
+++	};
+++	await walk(realRoot);
+++	files.sort((a, b) => a.localeCompare(b));
+++	return files;
+++}
+++
+++export async function loadProjectDocsManifest(cwd: string = getProjectDir()): Promise<ProjectDocsManifest | undefined> {
+++	const repoRoot = await findRepoRoot(cwd);
+++	if (!repoRoot) return undefined;
+++	const realRepoRoot = await realPathIfExists(repoRoot);
+++	if (!realRepoRoot) return undefined;
+++	const manifestPath = path.join(realRepoRoot, MANIFEST_RELATIVE_PATH);
+++	let raw: unknown;
+++	try {
+++		raw = await readManifestFile(manifestPath);
+++	} catch (error) {
+++		warn(`${String(error)} (${manifestPath})`);
+++		return undefined;
+++	}
+++	if (raw === undefined) return undefined;
+++	try {
+++		if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("manifest must be an object");
+++		const record = raw as Record<string, unknown>;
+++		if (record.version !== 1) throw new Error("version must be 1");
+++		if (typeof record.scheme !== "string") throw new Error("scheme must be a string");
+++		const scheme = record.scheme.trim().toLowerCase();
+++		if (scheme.length > 64 || !SCHEME_RE.test(scheme)) throw new Error("scheme is invalid");
+++		if (RESERVED_SCHEMES.has(scheme)) throw new Error(`scheme ${scheme} is reserved`);
+++		const root = validateRelative(typeof record.root === "undefined" ? "docs" : String(record.root), "root");
+++		if (record.root !== undefined && typeof record.root !== "string") throw new Error("root must be a string");
+++		const rawDocs = record.docs === undefined ? [] : record.docs;
+++		if (!Array.isArray(rawDocs)) throw new Error("docs must be an array");
+++		const rootCandidate = path.resolve(realRepoRoot, root);
+++		const realRoot = await realPathIfExists(rootCandidate);
+++		if (!realRoot) throw new Error("root does not exist");
+++		const rootContained = await resolveContainedPath(realRepoRoot, realRoot);
+++		if (rootContained.status !== "ok") throw new Error("root resolves outside repository");
+++		const rootStat = await fs.stat(realRoot);
+++		if (!rootStat.isDirectory()) throw new Error("root must be a directory");
+++		const files = await enumerateMarkdownFiles(realRoot);
+++		const fileSet = new Set(files.map(file => path.relative(realRoot, file).split(path.sep).join("/")));
+++		const docs: ProjectDocMetadata[] = [];
+++		for (const item of rawDocs) {
+++			if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("docs entries must be objects");
+++			const doc = item as Record<string, unknown>;
+++			if (typeof doc.path !== "string") throw new Error("docs entry path must be a string");
+++			const relativePath = validateRelative(doc.path, "docs entry path");
+++			if (!relativePath.endsWith(".md") || !fileSet.has(relativePath))
+++				throw new Error(`docs entry does not exist: ${relativePath}`);
+++			const title = sanitizeText(doc.title, "title");
+++			const description = sanitizeText(doc.description, "description");
+++			docs.push({
+++				path: relativePath,
+++				...(title === undefined ? {} : { title }),
+++				...(description === undefined ? {} : { description }),
+++			});
+++		}
+++		const description = sanitizeText(record.description, "description");
+++		return {
+++			version: 1,
+++			scheme,
+++			root,
+++			...(description === undefined ? {} : { description }),
+++			docs,
+++			repoRoot: realRepoRoot,
+++			realRoot,
+++		};
+++	} catch (error) {
+++		warn(`${String(error)} (${manifestPath})`);
+++		return undefined;
+++	}
+++}
+++
+++export async function listProjectDocsFiles(manifest: ProjectDocsManifest): Promise<string[]> {
+++	return enumerateMarkdownFiles(manifest.realRoot);
+++}
+++
+++export function projectDocsManifestPath(repoRoot: string): string {
+++	return path.join(repoRoot, MANIFEST_RELATIVE_PATH);
+++}
+++
+++export function projectDocsReservedScheme(scheme: string): boolean {
+++	return RESERVED_SCHEMES.has(scheme);
+++}
++diff --git a/packages/coding-agent/src/internal-urls/project-docs-protocol.ts b/packages/coding-agent/src/internal-urls/project-docs-protocol.ts
++new file mode 100644
++index 0000000000..c8513634af
++--- /dev/null
+++++ b/packages/coding-agent/src/internal-urls/project-docs-protocol.ts
++@@ -0,0 +1,128 @@
+++import * as fs from "node:fs/promises";
+++import * as path from "node:path";
+++import { getProjectDir } from "@oh-my-pi/pi-utils";
+++import { resolveContainedPath } from "../discovery/contained-path";
+++import { listProjectDocsFiles, loadProjectDocsManifest } from "./project-docs-manifest";
+++import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
+++
+++function escapeMarkdownText(value: string): string {
+++	return value
+++		.replaceAll("\\", "\\\\")
+++		.replaceAll(/([`*_{}[\]()#+!|<>])/g, "\\$1")
+++		.replaceAll("\n", " ")
+++		.replaceAll("\r", " ");
+++}
+++
+++function encodeDocumentPath(relative: string): string {
+++	return relative
+++		.split("/")
+++		.map(segment =>
+++			encodeURIComponent(segment).replace(
+++				/[!'()*]/g,
+++				character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+++			),
+++		)
+++		.join("/");
+++}
+++
+++function decodedDocumentPath(url: InternalUrl): string {
+++	const rawHost = url.rawHost ?? url.hostname;
+++	const rawPathname = url.rawPathname ?? url.pathname;
+++	let decodedPathname: string;
+++	try {
+++		decodedPathname = decodeURIComponent(rawPathname);
+++	} catch {
+++		throw new Error("project-docs URL contains malformed percent-encoding");
+++	}
+++	const decoded = `${rawHost}${decodedPathname}`;
+++	if (!decoded || decoded === "/") return "";
+++	const relative = decoded.replace(/^\/+/, "");
+++	if (
+++		decoded.includes("\\") ||
+++		path.posix.isAbsolute(decoded) ||
+++		path.win32.isAbsolute(decoded) ||
+++		relative.split("/").some(part => part === ".." || part === "")
+++	) {
+++		throw new Error("project-docs URL path must be a relative document path");
+++	}
+++	return relative;
+++}
+++
+++async function readUtf8(filePath: string): Promise<string> {
+++	const bytes = await fs.readFile(filePath);
+++	try {
+++		return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+++	} catch {
+++		throw new Error(`project-docs document is not valid UTF-8: ${filePath}`);
+++	}
+++}
+++
+++export class ProjectDocsProtocolHandler implements ProtocolHandler {
+++	readonly immutable = true;
+++	readonly scheme: string;
+++
+++	constructor(scheme: string) {
+++		this.scheme = scheme;
+++	}
+++
+++	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
+++		const cwd = context?.cwd ?? getProjectDir();
+++		const manifest = await loadProjectDocsManifest(cwd);
+++		if (!manifest) throw new Error(`project-docs scheme ${this.scheme} is unavailable for this project`);
+++		if (manifest.scheme !== this.scheme) {
+++			throw new Error(`project-docs scheme mismatch: expected ${manifest.scheme}://, got ${this.scheme}://`);
+++		}
+++		const relativePath = decodedDocumentPath(url);
+++		if (!relativePath) {
+++			const files = await listProjectDocsFiles(manifest);
+++			const metadata = new Map(manifest.docs.map(doc => [doc.path, doc]));
+++			const lines = [
+++				"# Project documentation",
+++				...(manifest.description ? ["", escapeMarkdownText(manifest.description)] : []),
+++				"",
+++				...files.map(file => {
+++					const relative = path.relative(manifest.realRoot, file).split(path.sep).join("/");
+++					const doc = metadata.get(relative);
+++					const suffix = [doc?.title, doc?.description]
+++						.filter(Boolean)
+++						.map(value => escapeMarkdownText(value as string));
+++					const label = escapeMarkdownText(relative);
+++					const target = `${this.scheme}://${encodeDocumentPath(relative)}`;
+++					return `- [${label}](${target})${suffix.length ? ` — ${suffix.join(" — ")}` : ""}`;
+++				}),
+++			];
+++			const content = lines.join("\n");
+++			return {
+++				url: url.href,
+++				content,
+++				contentType: "text/markdown",
+++				size: Buffer.byteLength(content, "utf8"),
+++				sourcePath: manifest.realRoot,
+++				isDirectory: true,
+++				immutable: true,
+++			};
+++		}
+++		if (!relativePath.endsWith(".md")) throw new Error("project-docs documents must use the .md extension");
+++		const candidate = path.resolve(manifest.realRoot, ...relativePath.split("/"));
+++		const resolved = await resolveContainedPath(manifest.realRoot, candidate);
+++		if (resolved.status !== "ok") throw new Error(`project-docs document not found: ${relativePath}`);
+++		const stat = await fs.stat(resolved.realPath);
+++		if (!stat.isFile()) throw new Error(`project-docs document is not a file: ${relativePath}`);
+++		const content = await readUtf8(resolved.realPath);
+++		return {
+++			url: url.href,
+++			content,
+++			contentType: "text/markdown",
+++			size: Buffer.byteLength(content, "utf8"),
+++			sourcePath: resolved.realPath,
+++			immutable: true,
+++		};
+++	}
+++
+++	async complete(_query?: string, context?: ResolveContext): Promise<UrlCompletion[]> {
+++		const manifest = await loadProjectDocsManifest(context?.cwd ?? getProjectDir());
+++		if (!manifest || manifest.scheme !== this.scheme) return [];
+++		const files = await listProjectDocsFiles(manifest);
+++		return files.map(file => ({ value: path.relative(manifest.realRoot, file).split(path.sep).join("/") }));
+++	}
+++}
++diff --git a/packages/coding-agent/src/internal-urls/project-docs.ts b/packages/coding-agent/src/internal-urls/project-docs.ts
++new file mode 100644
++index 0000000000..ef414949ff
++--- /dev/null
+++++ b/packages/coding-agent/src/internal-urls/project-docs.ts
++@@ -0,0 +1,30 @@
+++import { registerSelectorScheme } from "../tools/path-utils";
+++import { loadProjectDocsManifest, type ProjectDocsManifest } from "./project-docs-manifest";
+++import { ProjectDocsProtocolHandler } from "./project-docs-protocol";
+++import { InternalUrlRouter } from "./router";
+++
+++export async function registerProjectDocSchemes(cwd: string): Promise<ProjectDocsManifest | undefined> {
+++	const manifest = await loadProjectDocsManifest(cwd);
+++	if (!manifest) return undefined;
+++	const router = InternalUrlRouter.instance();
+++	const existing = router.getHandler(manifest.scheme);
+++	if (existing && !(existing instanceof ProjectDocsProtocolHandler)) {
+++		console.warn(`[project-docs] scheme ${manifest.scheme} is already registered by another handler`);
+++		return undefined;
+++	}
+++	if (!existing) router.register(new ProjectDocsProtocolHandler(manifest.scheme));
+++	registerSelectorScheme(manifest.scheme);
+++	return manifest;
+++}
+++
+++export async function projectDocsSchemeForCwd(cwd: string): Promise<string | undefined> {
+++	const manifest = await loadProjectDocsManifest(cwd);
+++	if (!manifest) return undefined;
+++	const handler = InternalUrlRouter.instance().getHandler(manifest.scheme);
+++	if (handler && !(handler instanceof ProjectDocsProtocolHandler)) return undefined;
+++	return manifest.scheme;
+++}
+++
+++export type { ProjectDocMetadata, ProjectDocsManifest } from "./project-docs-manifest";
+++export { loadProjectDocsManifest } from "./project-docs-manifest";
+++export { ProjectDocsProtocolHandler } from "./project-docs-protocol";
++diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
++index c9de644e9d..332e51a76d 100644
++--- a/packages/coding-agent/src/main.ts
+++++ b/packages/coding-agent/src/main.ts
++@@ -56,6 +56,7 @@ import { loadExtensions } from "./extensibility/extensions/loader";
++ import { ExtensionRunner } from "./extensibility/extensions/runner";
++ import type { ExtensionUIContext } from "./extensibility/extensions/types";
++ import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
+++import { registerProjectDocSchemes } from "./internal-urls/project-docs";
++ import { registerDaemonProjectPresence } from "./launch/presence";
++ import type { MCPManager } from "./mcp";
++ import { InteractiveMode } from "./modes/interactive-mode";
++@@ -678,6 +679,7 @@ async function switchToResumedProject(
++ 	clearPluginRootsAndCaches();
++ 	resetCapabilities();
++ 	const cwd = getProjectDir();
+++	await registerProjectDocSchemes(cwd);
++ 	// clearPluginRootsAndCaches only kicks off an unawaited re-warm; await a fresh
++ 	// destination preload so sync consumers (plugin-provided LSP/DAP config) never
++ 	// read the launch project's stale/empty roots during session creation.
++diff --git a/packages/coding-agent/src/modes/interactive-mode.ts b/packages/coding-agent/src/modes/interactive-mode.ts
++index 0f9d540266..a6a58f204d 100644
++--- a/packages/coding-agent/src/modes/interactive-mode.ts
+++++ b/packages/coding-agent/src/modes/interactive-mode.ts
++@@ -82,6 +82,7 @@ import type { Skill } from "../extensibility/skills";
++ import { loadSlashCommands } from "../extensibility/slash-commands";
++ import type { Goal, GoalModeState } from "../goals/state";
++ import { resolveLocalUrlToPath } from "../internal-urls";
+++import { registerProjectDocSchemes } from "../internal-urls/project-docs";
++ import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
++ import type { MCPManager } from "../mcp";
++ import {
++@@ -1383,6 +1384,7 @@ export class InteractiveMode implements InteractiveModeContext {
++ 		await this.refreshSkillState();
++ 		await this.refreshSlashCommandState(newCwd);
++ 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
+++		await registerProjectDocSchemes(newCwd);
++ 		this.statusLine.applyCwdChange();
++ 	}
++ 
++diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
++index 85570d974b..75c8ecec22 100644
++--- a/packages/coding-agent/src/prompts/system/system-prompt.md
+++++ b/packages/coding-agent/src/prompts/system/system-prompt.md
++@@ -70,6 +70,9 @@ Special URLs for internal resources; with most FS/bash tools they auto-resolve t
++ - `issue://<N>` (or `issue://<owner>/<repo>/<N>`): GitHub issue, disk-cached. Bare lists recent issues; `?state=open|closed|all&limit=&author=&label=`.
++ - `pr://<N>` (or `pr://<owner>/<repo>/<N>`): GitHub PR, same cache; `?comments=0` drops comments. Bare lists recent PRs; `?state=open|closed|merged|all&limit=&author=&label=`.
++ - `omp://`: harness docs; AVOID unless the user asks about the harness itself.
+++{{#if projectDocsScheme}}
+++- `{{projectDocsScheme}}://`: project documentation for this repository
+++{{/if}}
++ 
++ {{#if toolInfo.length}}
++ {{#if toolListMode}}
++diff --git a/packages/coding-agent/src/sdk.ts b/packages/coding-agent/src/sdk.ts
++index 117d36c4c1..cbf7e100ed 100644
++--- a/packages/coding-agent/src/sdk.ts
+++++ b/packages/coding-agent/src/sdk.ts
++@@ -104,7 +104,12 @@ import {
++ } from "./extensibility/skills";
++ import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
++ import type { HindsightSessionState } from "./hindsight/state";
++-import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
+++import {
+++	LocalProtocolHandler,
+++	type LocalProtocolOptions,
+++	projectDocsSchemeForCwd,
+++	registerProjectDocSchemes,
+++} from "./internal-urls";
++ import { setSharedLspEnabled } from "./lsp/client";
++ import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
++ import {
++@@ -1230,6 +1235,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
++ 
++ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> {
++ 	const cwd = options.cwd ?? getProjectDir();
+++	await registerProjectDocSchemes(cwd);
++ 	const agentDir = options.agentDir ?? getAgentDir();
++ 	const eventBus = options.eventBus ?? new EventBus();
++ 
++@@ -2809,6 +2815,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
++ 			tools: Map<string, AgentTool>,
++ 		): Promise<BuildSystemPromptResult> => {
++ 			const promptCwd = sessionManager.getCwd();
+++			const projectDocsScheme = await projectDocsSchemeForCwd(promptCwd);
++ 			const activeRepoContext = hasSession
++ 				? await logger.time("resolveActiveRepoContext", resolveRepoContext, promptCwd)
++ 				: initialActiveRepoContext;
++@@ -2926,6 +2933,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
++ 				personality: agentKind === "sub" ? "none" : settings.get("personality"),
++ 				renderMermaid: settings.get("tui.renderMermaid"),
++ 				activeRepoContext,
+++				projectDocsScheme,
++ 			});
++ 
++ 			if (options.systemPrompt === undefined) {
++diff --git a/packages/coding-agent/src/slash-commands/builtin-lifecycle.ts b/packages/coding-agent/src/slash-commands/builtin-lifecycle.ts
++index 5c999ce5e3..6d651e7c0c 100644
++--- a/packages/coding-agent/src/slash-commands/builtin-lifecycle.ts
+++++ b/packages/coding-agent/src/slash-commands/builtin-lifecycle.ts
++@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
++ import * as path from "node:path";
++ import { setProjectDir } from "@oh-my-pi/pi-utils";
++ import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
+++import { registerProjectDocSchemes } from "../internal-urls/project-docs";
++ import { memoryStatsUnavailableMessage, resolveMemoryBackend } from "../memory-backend";
++ import type { FreshSessionResult } from "../session/agent-session";
++ import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
++@@ -414,6 +415,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
++ 				return usage(`Move failed: ${errorMessage(err)}`, runtime);
++ 			}
++ 			setProjectDir(resolvedPath);
+++			await registerProjectDocSchemes(resolvedPath);
++ 			await runtime.settings.reloadForCwd(resolvedPath);
++ 			applyProviderGlobalsFromSettings(runtime.settings);
++ 			// Reload plugin/capability caches so the next prompt sees commands and
++diff --git a/packages/coding-agent/src/system-prompt.ts b/packages/coding-agent/src/system-prompt.ts
++index 408a4f9daa..664c88e185 100644
++--- a/packages/coding-agent/src/system-prompt.ts
+++++ b/packages/coding-agent/src/system-prompt.ts
++@@ -557,6 +557,8 @@ export interface BuildSystemPromptOptions {
++ 	xdevDocs?: string;
++ 	/** Whether Auto-QA grievance reporting is enabled; renders the `xd://report_issue` note. */
++ 	autoQaEnabled?: boolean;
+++	/** Registered project documentation URL scheme for the current repository. */
+++	projectDocsScheme?: string;
++ }
++ 
++ /** Result of building provider-facing system prompt messages. */
++@@ -614,6 +616,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
++ 		xdevTools = [],
++ 		xdevDocs = "",
++ 		autoQaEnabled = false,
+++		projectDocsScheme,
++ 		activeRepoContext: providedActiveRepoContext,
++ 	} = options;
++ 	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
++@@ -893,6 +896,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
++ 		renderMermaid,
++ 		xdevTools,
++ 		hasDynamicXdevTools: xdevTools.some(mounted => mounted.dynamic === true),
+++		projectDocsScheme,
++ 		xdevDocs,
++ 		autoQaEnabled,
++ 	};
++diff --git a/packages/coding-agent/src/tools/path-utils.ts b/packages/coding-agent/src/tools/path-utils.ts
++index 696f5799a5..819c168515 100644
++--- a/packages/coding-agent/src/tools/path-utils.ts
+++++ b/packages/coding-agent/src/tools/path-utils.ts
++@@ -32,7 +32,7 @@ const INTERNAL_URL_SELECTOR_PART_RE = new RegExp(
++ // for an `ssh://host:port` that has no `/path`, so the port colon is never
++ // mistaken for a selector (a real ssh selector trails the `/path`, e.g.
++ // `ssh://h/f:1-5`).
++-const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
+++const BUILTIN_INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
++ 	agent: true,
++ 	artifact: true,
++ 	issue: true,
++@@ -47,6 +47,19 @@ const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
++ 	ssh: true,
++ 	vault: true,
++ };
+++const additionalInternalSchemesWithSelectors = new Set<string>();
+++
+++export function registerSelectorScheme(scheme: string): void {
+++	additionalInternalSchemesWithSelectors.add(scheme.trim().toLowerCase());
+++}
+++
+++export function unregisterSelectorScheme(scheme: string): void {
+++	additionalInternalSchemesWithSelectors.delete(scheme.trim().toLowerCase());
+++}
+++
+++export function resetSelectorSchemesForTests(): void {
+++	additionalInternalSchemesWithSelectors.clear();
+++}
++ // Schemes whose resource URIs are server-defined and may legitimately end
++ // with selector-shaped tails (e.g. `:raw`, `:conflicts`, `:1-50`, `/:raw`).
++ // `McpProtocolHandler` resolves by exact URI match (`r.uri === uri`), so
++@@ -403,7 +416,8 @@ export function splitInternalUrlSel(rawPath: string): { path: string; sel?: stri
++ 	// legitimately end in selector-shaped tails. Forward verbatim — see
++ 	// OPAQUE_RESOURCE_SCHEMES.
++ 	if (OPAQUE_RESOURCE_SCHEMES.has(scheme)) return { path: rawPath };
++-	if (!INTERNAL_SCHEMES_WITH_SELECTORS[scheme]) return { path: rawPath };
+++	if (!BUILTIN_INTERNAL_SCHEMES_WITH_SELECTORS[scheme] && !additionalInternalSchemesWithSelectors.has(scheme))
+++		return { path: rawPath };
++ 
++ 	const schemeEnd = schemeMatch[0].length;
++ 	// ssh:// authority carries an optional `:port`; with no `/path` after the
++@@ -469,7 +483,8 @@ export function isInternalUrlPath(filePath: string): boolean {
++ 	for (const prefix of TOP_LEVEL_INTERNAL_URL_PREFIXES) {
++ 		if (expandedAndNormalized.startsWith(prefix)) return true;
++ 	}
++-	return false;
+++	const scheme = expandedAndNormalized.match(INTERNAL_URL_SCHEME_RE)?.[1]?.toLowerCase();
+++	return scheme !== undefined && additionalInternalSchemesWithSelectors.has(scheme);
++ }
++ 
++ /**
++diff --git a/packages/coding-agent/test/project-docs-protocol.test.ts b/packages/coding-agent/test/project-docs-protocol.test.ts
++new file mode 100644
++index 0000000000..3db20454c0
++--- /dev/null
+++++ b/packages/coding-agent/test/project-docs-protocol.test.ts
++@@ -0,0 +1,171 @@
+++import { afterEach, describe, expect, it } from "bun:test";
+++import * as fs from "node:fs/promises";
+++import * as os from "node:os";
+++import * as path from "node:path";
+++import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+++import {
+++	InternalUrlRouter,
+++	type ProjectDocsProtocolHandler,
+++	parseInternalUrl,
+++	registerProjectDocSchemes,
+++} from "@oh-my-pi/pi-coding-agent/internal-urls";
+++import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+++import { resetSelectorSchemesForTests, splitInternalUrlSel } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
+++import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
+++
+++const roots: string[] = [];
+++
+++async function project(scheme = "vitrine.se"): Promise<string> {
+++	const root = await fs.mkdtemp(path.join(os.tmpdir(), "project-docs-"));
+++	roots.push(root);
+++	await fs.mkdir(path.join(root, ".git"));
+++	await fs.mkdir(path.join(root, ".omp"));
+++	await fs.mkdir(path.join(root, "docs", "nested"), { recursive: true });
+++	await Bun.write(
+++		path.join(root, ".omp", "project-docs.json"),
+++		JSON.stringify({ version: 1, scheme, root: "docs", docs: [] }),
+++	);
+++	return root;
+++}
+++
+++async function manifest(root: string, value: unknown): Promise<void> {
+++	await Bun.write(path.join(root, ".omp", "project-docs.json"), JSON.stringify(value));
+++}
+++
+++function url(value: string) {
+++	return parseInternalUrl(value);
+++}
+++
+++afterEach(async () => {
+++	InternalUrlRouter.resetForTests();
+++	resetSelectorSchemesForTests();
+++	for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+++});
+++
+++describe("project-docs protocol", () => {
+++	it("resolves an index with sourcePath and nested documents", async () => {
+++		const root = await project();
+++		await Bun.write(path.join(root, "docs", "architecture.md"), "# Architecture\n");
+++		await Bun.write(path.join(root, "docs", "nested", "guide.md"), "# Guide\nneedle\n");
+++		await manifest(root, {
+++			version: 1,
+++			scheme: " VITRINE.SE ",
+++			root: "docs",
+++			description: "Vitrine docs",
+++			docs: [{ path: "nested/guide.md", title: "Guide", description: "Nested" }],
+++		});
+++		await registerProjectDocSchemes(root);
+++		const handler = InternalUrlRouter.instance().getHandler("vitrine.se") as ProjectDocsProtocolHandler;
+++		const index = await handler.resolve(url("vitrine.se://"), { cwd: root });
+++		expect(index.isDirectory).toBe(true);
+++		expect(index.sourcePath).toBe(await fs.realpath(path.join(root, "docs")));
+++		expect(index.content).toContain("Vitrine docs");
+++		expect(index.content).toContain("[architecture.md](vitrine.se://architecture.md)");
+++		const nested = await handler.resolve(url("vitrine.se://nested/guide.md"), { cwd: root });
+++		expect(nested.sourcePath).toBe(await fs.realpath(path.join(root, "docs", "nested", "guide.md")));
+++		expect(nested.content).toContain("needle");
+++		expect(nested.immutable).toBe(true);
+++	});
+++
+++	it("rejects absolute, encoded, malformed, and symlink traversal", async () => {
+++		const root = await project();
+++		await Bun.write(path.join(root, "docs", "safe.md"), "safe\n");
+++		const outside = await fs.mkdtemp(path.join(os.tmpdir(), "project-docs-outside-"));
+++		roots.push(outside);
+++		await Bun.write(path.join(outside, "secret.md"), "secret\n");
+++		await manifest(root, { version: 1, scheme: "docs", docs: [] });
+++		await registerProjectDocSchemes(root);
+++		const handler = InternalUrlRouter.instance().getHandler("docs")!;
+++		await fs.symlink(path.join(outside, "secret.md"), path.join(root, "docs", "link.md"));
+++		await expect(handler.resolve(url("docs:///etc/passwd"), { cwd: root })).rejects.toThrow(/relative|unavailable/);
+++		await expect(handler.resolve(url("docs://%2e%2e/%2e%2e/secret.md"), { cwd: root })).rejects.toThrow(
+++			/relative|unavailable/,
+++		);
+++		await expect(handler.resolve(url("docs://safe.md:%ZZ"), { cwd: root })).rejects.toThrow(/percent|unavailable/);
+++		await expect(handler.resolve(url("docs://link.md"), { cwd: root })).rejects.toThrow(
+++			/not found|outside|unavailable/,
+++		);
+++	});
+++	it("rejects invalid manifests, non-Markdown trees, and collisions", async () => {
+++		const root = await project("docsvalid");
+++		await Bun.write(path.join(root, "docs", "bad.txt"), "bad\n");
+++		const other = await project("file");
+++		expect(await registerProjectDocSchemes(other)).toBeUndefined();
+++		const collision = await project("conflict");
+++		await fs.rm(path.join(collision, "docs", "nested"), { recursive: true });
+++		await manifest(collision, { version: 1, scheme: "custom", docs: [{ path: "missing.md" }] });
+++		expect(await registerProjectDocSchemes(collision)).toBeUndefined();
+++		InternalUrlRouter.instance().register({
+++			scheme: "taken",
+++			immutable: true,
+++			async resolve() {
+++				throw new Error("unused");
+++			},
+++		});
+++		const taken = await project("taken");
+++		expect(await registerProjectDocSchemes(taken)).toBeUndefined();
+++	});
+++
+++	it("isolates same schemes by context and fails closed for mismatch or absent manifests", async () => {
+++		const first = await project("shared");
+++		const second = await project("shared");
+++		await Bun.write(path.join(first, "docs", "same.md"), "first\n");
+++		await Bun.write(path.join(second, "docs", "same.md"), "second\n");
+++		await registerProjectDocSchemes(first);
+++		await registerProjectDocSchemes(second);
+++		const handler = InternalUrlRouter.instance().getHandler("shared")!;
+++		expect((await handler.resolve(url("shared://same.md"), { cwd: first })).content).toBe("first\n");
+++		expect((await handler.resolve(url("shared://same.md"), { cwd: second })).content).toBe("second\n");
+++		const mismatch = await project("other");
+++		await expect(handler.resolve(url("shared://"), { cwd: mismatch })).rejects.toThrow(/mismatch/);
+++		const noRepo = await fs.mkdtemp(path.join(os.tmpdir(), "project-docs-no-repo-"));
+++		roots.push(noRepo);
+++		await expect(handler.resolve(url("shared://"), { cwd: noRepo })).rejects.toThrow(/unavailable/);
+++	});
+++
+++	it("does not cache document bodies and escapes index names and metadata", async () => {
+++		const root = await project("docs");
+++		const filename = "danger`name.md";
+++		await Bun.write(path.join(root, "docs", filename), "old\n");
+++		await Bun.write(path.join(root, "docs", "100%-coverage.md"), "percent\n");
+++		await manifest(root, {
+++			version: 1,
+++			scheme: "docs",
+++			docs: [{ path: filename, title: "[Title]", description: "`description`" }, { path: "100%-coverage.md" }],
+++		});
+++		await registerProjectDocSchemes(root);
+++		const handler = InternalUrlRouter.instance().getHandler("docs")!;
+++		const first = await handler.resolve(url("docs://"), { cwd: root });
+++		expect(first.content).toContain("[danger\\`name.md](docs://danger%60name.md)");
+++		expect(first.content).toContain("\\[Title\\]");
+++		expect(first.content).toContain("[100%-coverage.md](docs://100%25-coverage.md)");
+++		await Bun.write(path.join(root, "docs", filename), "new\n");
+++		expect((await handler.resolve(url("docs://danger%60name.md"), { cwd: root })).content).toBe("new\n");
+++		expect((await handler.resolve(url("docs://100%25-coverage.md"), { cwd: root })).content).toBe("percent\n");
+++	});
+++
+++	it("supports selector registration cleanup and a real line selector endpoint", async () => {
+++		const root = await project("docs");
+++		await Bun.write(path.join(root, "docs", "guide.md"), "one\ntwo\nthree\n");
+++		await manifest(root, { version: 1, scheme: "docs", docs: [] });
+++		await registerProjectDocSchemes(root);
+++		expect(splitInternalUrlSel("docs://guide.md:raw:1-2")).toEqual({ path: "docs://guide.md", sel: "raw:1-2" });
+++		const session: ToolSession = {
+++			cwd: root,
+++			hasUI: false,
+++			getSessionFile: () => null,
+++			getSessionSpawns: () => "*",
+++			settings: Settings.isolated({ "fetch.enabled": true }),
+++		};
+++		const read = await new ReadTool(session).execute("selector-read", { path: "docs://guide.md:raw:1-2" });
+++		const readText = read.content
+++			.filter(block => block.type === "text")
+++			.map(block => block.text)
+++			.join("\n");
+++		expect(readText).toContain("one");
+++		expect(readText).toContain("two");
+++		expect(readText).not.toContain("three");
+++		resetSelectorSchemesForTests();
+++		expect(splitInternalUrlSel("docs://guide.md:raw:1-2")).toEqual({ path: "docs://guide.md:raw:1-2" });
+++	});
+++});
++diff --git a/packages/coding-agent/test/tools/grep-project-docs.test.ts b/packages/coding-agent/test/tools/grep-project-docs.test.ts
++new file mode 100644
++index 0000000000..d2a5bb0cb0
++--- /dev/null
+++++ b/packages/coding-agent/test/tools/grep-project-docs.test.ts
++@@ -0,0 +1,52 @@
+++import { afterEach, describe, expect, it } from "bun:test";
+++import * as fs from "node:fs/promises";
+++import * as os from "node:os";
+++import * as path from "node:path";
+++import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+++import { InternalUrlRouter, registerProjectDocSchemes } from "@oh-my-pi/pi-coding-agent/internal-urls";
+++import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+++import { resetSelectorSchemesForTests } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
+++import { GrepTool } from "../../src/tools/grep";
+++
+++function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
+++	return result.content
+++		.filter(block => block.type === "text")
+++		.map(block => block.text ?? "")
+++		.join("\n");
+++}
+++
+++describe("GrepTool project-docs URLs", () => {
+++	let root: string;
+++
+++	afterEach(async () => {
+++		InternalUrlRouter.resetForTests();
+++		resetSelectorSchemesForTests();
+++		if (root) await fs.rm(root, { recursive: true, force: true });
+++	});
+++
+++	it("recurses the real Markdown tree and does not manufacture hashlines", async () => {
+++		root = await fs.mkdtemp(path.join(os.tmpdir(), "grep-project-docs-"));
+++		await fs.mkdir(path.join(root, ".git"));
+++		await fs.mkdir(path.join(root, ".omp"));
+++		await fs.mkdir(path.join(root, "docs", "nested"), { recursive: true });
+++		await Bun.write(
+++			path.join(root, ".omp", "project-docs.json"),
+++			JSON.stringify({ version: 1, scheme: "docs", docs: [] }),
+++		);
+++		await Bun.write(path.join(root, "docs", "index.md"), "no match\n");
+++		await Bun.write(path.join(root, "docs", "nested", "guide.md"), "nested needle\n");
+++		await registerProjectDocSchemes(root);
+++		const session: ToolSession = {
+++			cwd: root,
+++			hasUI: false,
+++			getSessionFile: () => null,
+++			getSessionSpawns: () => "*",
+++			settings: Settings.isolated({ "grep.contextBefore": 0, "grep.contextAfter": 0 }),
+++		};
+++		const result = await new GrepTool(session).execute("project-docs-grep", { pattern: "needle", path: "docs://" });
+++		const output = textOf(result);
+++		expect(output).toContain("guide.md");
+++		expect(output).toContain("nested needle");
+++		expect(output).not.toMatch(/\[.*#[0-9A-F]{4}\]/i);
+++	});
+++});
++-- 
++2.55.0
++
+diff --git a/codeiro/patches/series b/codeiro/patches/series
+index 276ff486c1..19f5570611 100644
+--- a/codeiro/patches/series
++++ b/codeiro/patches/series
+@@ -5,3 +5,6 @@
+ 0004-fix-bloquear-traversal-no-addon-nativo.patch
+ 0005-fix-proteger-destino-do-addon-nativo.patch
+ 0006-fix-validar-ancestrais-do-addon-nativo.patch
++0007-docs-formalizar-fluxo-sustent-vel-do-fork.patch
++0008-fix-fixar-tag-base-na-valida-o-da-s-rie.patch
++0009-feat-adicionar-documenta-o-por-projeto-ao-OMP.patch
+-- 
+2.55.0
+

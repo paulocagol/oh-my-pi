@@ -1,0 +1,36 @@
+From 1651f1a9dad5bfffc12e38e719374b9e0aa43905 Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Tue, 11 Aug 2026 17:29:52 -0300
+Subject: [PATCH 10/23] =?UTF-8?q?docs:=20registrar=20limite=20de=20confian?=
+ =?UTF-8?q?=C3=A7a=20do=20addon?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ codeiro/README.md | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/codeiro/README.md b/codeiro/README.md
+index 9e8e5797b9..0e547e9f05 100644
+--- a/codeiro/README.md
++++ b/codeiro/README.md
+@@ -48,6 +48,15 @@ Campos:
+ O build roda o bootstrap do próprio repositório e reutiliza o addon nativo
+ publicado para a mesma versão; precisa de `git`, `bun` 1.3.14+ e `tar` no PATH.
+ 
++## Segurança do addon nativo
++
++O updater valida o SHA-512 do tarball publicado, rejeita entradas absolutas ou
++com `..`, rejeita links e arquivos especiais antes da extração e só copia
++arquivos `.node` regulares do diretório `package/`. Isso protege o staging
++contra traversal do archive. A validação não substitui a confiança no upstream,
++no registry npm e na proveniência do pacote; o MVP não faz uma auditoria
++independente do conteúdo nativo.
++
+ ## Manter a série
+ 
+ `patches/series` é uma série quilt: um patch por linha, na ordem de aplicação,
+-- 
+2.55.0
+

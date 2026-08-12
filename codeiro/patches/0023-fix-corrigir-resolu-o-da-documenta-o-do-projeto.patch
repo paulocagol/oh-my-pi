@@ -1,0 +1,59 @@
+From f87ec24f773e74f25372fb7c3ec47532cc34d13a Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Wed, 12 Aug 2026 08:18:19 -0300
+Subject: [PATCH 23/23] =?UTF-8?q?fix:=20corrigir=20resolu=C3=A7=C3=A3o=20d?=
+ =?UTF-8?q?a=20documenta=C3=A7=C3=A3o=20do=20projeto?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ packages/coding-agent/src/modes/interactive-mode.ts      | 8 +-------
+ .../coding-agent/src/prompts/system/system-prompt.md     | 9 ++++-----
+ 2 files changed, 5 insertions(+), 12 deletions(-)
+
+diff --git a/packages/coding-agent/src/modes/interactive-mode.ts b/packages/coding-agent/src/modes/interactive-mode.ts
+index c8bd971c99..3448f28b6d 100644
+--- a/packages/coding-agent/src/modes/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive-mode.ts
+@@ -81,14 +81,8 @@ import type { CompactOptions } from "../extensibility/extensions/types";
+ import type { Skill } from "../extensibility/skills";
+ import { loadSlashCommands } from "../extensibility/slash-commands";
+ import type { Goal, GoalModeState } from "../goals/state";
+-1: import { copyLocalArtifacts, resolveLocalUrlToPath } from "../internal-urls";
++import { copyLocalArtifacts, resolveLocalUrlToPath } from "../internal-urls";
+ import { registerProjectDocSchemes } from "../internal-urls/project-docs";
+-2: - `issue://<N>` / `issue://<owner>/<repo>/<N>`: GitHub issue; bare: recent; `?state=open|closed|all&limit=&author=&label=`.
+-- `pr://<N>` / `pr://<owner>/<repo>/<N>`: same cache; bare: recent; `?comments=0` `?state=open|closed|merged|all&limit=&author=&label=`.
+-- `omp://`: harness docs; AVOID unless user asks about the harness.
+-{{#if projectDocsScheme}}
+-- `{{projectDocsScheme}}://`: project documentation for this repository
+-{{/if}}
+ import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
+ import type { MCPManager } from "../mcp";
+ import {
+diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
+index ce88e724db..94d755f45e 100644
+--- a/packages/coding-agent/src/prompts/system/system-prompt.md
++++ b/packages/coding-agent/src/prompts/system/system-prompt.md
+@@ -66,13 +66,12 @@ Most FS/bash tools auto-resolve these to FS paths.
+ - `vault://<vault>/<path>`: Obsidian read/edit; `vault://`: vault list; `vault://_/…`: active vault. File `?op=outline|backlinks|links|tags|properties|tasks|base|…`; vault `?op=search&q=…|daily|tasks|orphans|unresolved|bases|…`.
+ {{/if}}
+ - `mcp://<uri>`: MCP resource
+-1: import { copyLocalArtifacts, resolveLocalUrlToPath } from "../internal-urls";
+-import { registerProjectDocSchemes } from "../internal-urls/project-docs";
+-2: - `issue://<N>` / `issue://<owner>/<repo>/<N>`: GitHub issue; bare: recent; `?state=open|closed|all&limit=&author=&label=`.
++- `issue://<N>` / `issue://<owner>/<repo>/<N>`: GitHub issue; bare: recent; `?state=open|closed|all&limit=&author=&label=`.
+ - `pr://<N>` / `pr://<owner>/<repo>/<N>`: same cache; bare: recent; `?comments=0` `?state=open|closed|merged|all&limit=&author=&label=`.
+-- `omp://`: harness docs; AVOID unless user asks about the harness.
++- `omp://`: harness docs; AVOID unless user asks about harness.
+++
+ {{#if projectDocsScheme}}
+-- `{{projectDocsScheme}}://`: curated documentation for THIS repository — architecture, decisions, conventions, runbooks. Before searching the tree for how this project works, read the bare `{{projectDocsScheme}}://` index, then open only the documents it names. `grep <pattern> {{projectDocsScheme}}://` searches the whole catalog.
++- `{{projectDocsScheme}}://`: project documentation for this repository
+ {{/if}}
+ 
+ {{#if toolInfo.length}}
+-- 
+2.55.0
+
