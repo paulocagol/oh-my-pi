@@ -1,0 +1,25 @@
+From b8fe2b1a64036ed5f782c22afb741faf6bbb1f5f Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Wed, 12 Aug 2026 15:33:09 -0300
+Subject: [PATCH 19/19] fix: manter omp update como comando do fork
+
+---
+ packages/coding-agent/src/cli/update-cli.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/packages/coding-agent/src/cli/update-cli.ts b/packages/coding-agent/src/cli/update-cli.ts
+index 59dc5933c3..889299895f 100644
+--- a/packages/coding-agent/src/cli/update-cli.ts
++++ b/packages/coding-agent/src/cli/update-cli.ts
+@@ -1385,7 +1385,7 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
+ 				`Refusing to update: ${targetInstall.binaryPath} is a ${CODEIRO_DISTRIBUTION} install (${targetInstall.manifestPath}).`,
+ 			),
+ 		);
+-		console.error(chalk.dim(`Update it through its own binary: ${targetInstall.binaryPath} update`));
++		console.error(chalk.dim("Run `omp update` from the fork-selected runtime to rebuild the patched source tree."));
+ 		process.exit(1);
+ 	}
+ 
+-- 
+2.55.0
+
