@@ -1,7 +1,7 @@
 # Changelog
 
 ## [Unreleased]
-- Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery.
+- Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery. A docs root may carry the assets its Markdown links to — non-Markdown files are skipped, never indexed, and never resolvable — and `exclude` globs curate the generated index without becoming an access-control boundary.
 
 ## [17.3.1] - 2026-08-13
 
