@@ -86,9 +86,7 @@ describe("project-docs protocol", () => {
 			/not found|outside|unavailable/,
 		);
 	});
-	it("rejects invalid manifests, non-Markdown trees, and collisions", async () => {
-		const root = await project("docsvalid");
-		await Bun.write(path.join(root, "docs", "bad.txt"), "bad\n");
+	it("rejects invalid manifests and scheme collisions", async () => {
 		const other = await project("file");
 		expect(await registerProjectDocSchemes(other)).toBeUndefined();
 		const collision = await project("conflict");
@@ -104,6 +102,59 @@ describe("project-docs protocol", () => {
 		});
 		const taken = await project("taken");
 		expect(await registerProjectDocSchemes(taken)).toBeUndefined();
+	});
+
+	it("skips non-Markdown assets, honors exclude globs, and keeps exclusion out of access control", async () => {
+		const root = await project();
+		await Bun.write(path.join(root, "docs", "architecture.md"), "# Architecture\n");
+		await Bun.write(path.join(root, "docs", "nested", "guide.md"), "# Guide\n");
+		await fs.mkdir(path.join(root, "docs", "pen"), { recursive: true });
+		await Bun.write(path.join(root, "docs", "pen", "draft.md"), "# Draft\n");
+		await Bun.write(path.join(root, "docs", "pen", "flow.js"), "// asset\n");
+		await Bun.write(path.join(root, "docs", "logo.png"), "not markdown\n");
+		await manifest(root, {
+			version: 1,
+			scheme: "vitrine.se",
+			root: "docs",
+			exclude: ["pen/**"],
+			docs: [{ path: "architecture.md", title: "Arquitetura" }],
+		});
+		expect(await registerProjectDocSchemes(root)).toBeDefined();
+		const handler = InternalUrlRouter.instance().getHandler("vitrine.se")!;
+		const index = await handler.resolve(url("vitrine.se://"), { cwd: root });
+		expect(index.content).toContain("architecture.md");
+		expect(index.content).toContain("nested/guide.md");
+		// Assets never reach the index, and `exclude` curates it further.
+		expect(index.content).not.toContain("logo.png");
+		expect(index.content).not.toContain("flow.js");
+		expect(index.content).not.toContain("draft.md");
+		const completions = await handler.complete?.(undefined, { cwd: root });
+		expect(completions?.map(entry => entry.value).sort()).toEqual(["architecture.md", "nested/guide.md"]);
+		// Curation, not access control: an excluded document still resolves.
+		expect((await handler.resolve(url("vitrine.se://pen/draft.md"), { cwd: root })).content).toBe("# Draft\n");
+		// Assets stay unreachable through the scheme regardless of the walk.
+		await expect(handler.resolve(url("vitrine.se://logo.png"), { cwd: root })).rejects.toThrow(/\.md|unavailable/);
+	});
+
+	it("fails closed on malformed exclude patterns and on metadata for excluded documents", async () => {
+		const root = await project("excl");
+		await Bun.write(path.join(root, "docs", "keep.md"), "# Keep\n");
+		await fs.mkdir(path.join(root, "docs", "drafts"), { recursive: true });
+		await Bun.write(path.join(root, "docs", "drafts", "wip.md"), "# WIP\n");
+		const base = { version: 1, scheme: "excl", root: "docs" };
+		await manifest(root, { ...base, exclude: "drafts/**" });
+		expect(await registerProjectDocSchemes(root)).toBeUndefined();
+		await manifest(root, { ...base, exclude: [42] });
+		expect(await registerProjectDocSchemes(root)).toBeUndefined();
+		await manifest(root, { ...base, exclude: ["../outside/**"] });
+		expect(await registerProjectDocSchemes(root)).toBeUndefined();
+		await manifest(root, { ...base, exclude: ["/abs/**"] });
+		expect(await registerProjectDocSchemes(root)).toBeUndefined();
+		// Listing a document the manifest itself excluded is an authoring bug, not a silent drop.
+		await manifest(root, { ...base, exclude: ["drafts/**"], docs: [{ path: "drafts/wip.md" }] });
+		expect(await registerProjectDocSchemes(root)).toBeUndefined();
+		await manifest(root, { ...base, exclude: ["drafts/**"], docs: [{ path: "keep.md" }] });
+		expect(await registerProjectDocSchemes(root)).toBeDefined();
 	});
 
 	it("isolates same schemes by context and fails closed for mismatch or absent manifests", async () => {

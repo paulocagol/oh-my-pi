@@ -71,7 +71,7 @@ Special URLs for internal resources; with most FS/bash tools they auto-resolve t
 - `pr://<N>` (or `pr://<owner>/<repo>/<N>`): GitHub PR, same cache; `?comments=0` drops comments. Bare lists recent PRs; `?state=open|closed|merged|all&limit=&author=&label=`.
 - `omp://`: harness docs; AVOID unless the user asks about the harness itself.
 {{#if projectDocsScheme}}
-- `{{projectDocsScheme}}://`: project documentation for this repository
+- `{{projectDocsScheme}}://`: curated documentation for THIS repository — architecture, decisions, conventions, runbooks. Before searching the tree for how this project works, read the bare `{{projectDocsScheme}}://` index, then open only the documents it names. `grep <pattern> {{projectDocsScheme}}://` searches the whole catalog.
 {{/if}}
 
 {{#if toolInfo.length}}

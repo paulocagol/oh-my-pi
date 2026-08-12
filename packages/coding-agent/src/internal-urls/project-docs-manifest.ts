@@ -10,6 +10,7 @@ const SCHEME_RE = /^[a-z][a-z0-9+.-]*$/;
 const RESERVED_SCHEMES = new Set(["file", "http", "https", "conflict"]);
 const MAX_LABEL_LENGTH = 256;
 const MAX_PATH_LENGTH = 1024;
+const MAX_EXCLUDE_PATTERNS = 64;
 
 export interface ProjectDocMetadata {
 	path: string;
@@ -22,6 +23,13 @@ export interface ProjectDocsManifest {
 	scheme: string;
 	root: string;
 	description?: string;
+	/**
+	 * Globs, relative to `root`, whose matches stay out of the generated index and
+	 * autocomplete. Curation only — excluded files remain readable through the
+	 * scheme and through plain `read`; containment and symlink checks are the
+	 * actual security boundary.
+	 */
+	exclude: string[];
 	docs: ProjectDocMetadata[];
 	repoRoot: string;
 	realRoot: string;
@@ -60,6 +68,31 @@ function validateRelative(value: string, field: string): string {
 	return normalized;
 }
 
+/**
+ * Parses `exclude`: globs, relative to the docs root, that keep matching files out
+ * of the generated index. Patterns are validated as root-relative paths so a glob
+ * can never reach above the root, and compiled eagerly so a malformed pattern is a
+ * manifest error instead of a silent no-op at walk time. Absent means no exclusion,
+ * which keeps every manifest written before this field valid.
+ */
+function validateExclude(value: unknown): string[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) throw new Error("exclude must be an array");
+	if (value.length > MAX_EXCLUDE_PATTERNS) throw new Error(`exclude exceeds ${MAX_EXCLUDE_PATTERNS} patterns`);
+	const patterns: string[] = [];
+	for (const entry of value) {
+		if (typeof entry !== "string") throw new Error("exclude patterns must be strings");
+		const pattern = validateRelative(entry, "exclude pattern");
+		try {
+			new Bun.Glob(pattern);
+		} catch (error) {
+			throw new Error(`exclude pattern is not a valid glob: ${pattern} (${String(error)})`);
+		}
+		patterns.push(pattern);
+	}
+	return patterns;
+}
+
 async function realPathIfExists(target: string): Promise<string | null> {
 	try {
 		return await fs.realpath(target);
@@ -82,9 +115,15 @@ async function readManifestFile(manifestPath: string): Promise<unknown> {
 	}
 }
 
-async function enumerateMarkdownFiles(realRoot: string): Promise<string[]> {
+async function enumerateMarkdownFiles(realRoot: string, exclude: readonly string[] = []): Promise<string[]> {
 	const files: string[] = [];
 	const visited = new Set<string>();
+	const matchers = exclude.map(pattern => new Bun.Glob(pattern));
+	const isExcluded = (realFile: string): boolean => {
+		if (matchers.length === 0) return false;
+		const relative = path.relative(realRoot, realFile).split(path.sep).join("/");
+		return matchers.some(matcher => matcher.match(relative));
+	};
 	const walk = async (directory: string): Promise<void> => {
 		const realDirectory = await realPathIfExists(directory);
 		if (!realDirectory || visited.has(realDirectory)) return;
@@ -108,10 +147,14 @@ async function enumerateMarkdownFiles(realRoot: string): Promise<string[]> {
 			const stat = await fs.stat(realCandidate);
 			if (stat.isDirectory()) await walk(realCandidate);
 			else if (stat.isFile()) {
+				// A docs root is allowed to carry the assets its Markdown links to
+				// (images, design sources). They are skipped, never indexed, and never
+				// resolvable — only `.md` names reach the generated index.
+				if (!entry.name.endsWith(".md")) continue;
 				if (/[\u0000-\u001f\u007f]/u.test(entry.name)) {
 					throw new Error(`docs root contains control character in filename: ${entry.name}`);
 				}
-				if (!entry.name.endsWith(".md")) throw new Error(`docs root contains non-Markdown file: ${entry.name}`);
+				if (isExcluded(realCandidate)) continue;
 				files.push(realCandidate);
 			}
 		}
@@ -145,6 +188,7 @@ export async function loadProjectDocsManifest(cwd: string = getProjectDir()): Pr
 		if (RESERVED_SCHEMES.has(scheme)) throw new Error(`scheme ${scheme} is reserved`);
 		const root = validateRelative(typeof record.root === "undefined" ? "docs" : String(record.root), "root");
 		if (record.root !== undefined && typeof record.root !== "string") throw new Error("root must be a string");
+		const exclude = validateExclude(record.exclude);
 		const rawDocs = record.docs === undefined ? [] : record.docs;
 		if (!Array.isArray(rawDocs)) throw new Error("docs must be an array");
 		const rootCandidate = path.resolve(realRepoRoot, root);
@@ -154,14 +198,17 @@ export async function loadProjectDocsManifest(cwd: string = getProjectDir()): Pr
 		if (rootContained.status !== "ok") throw new Error("root resolves outside repository");
 		const rootStat = await fs.stat(realRoot);
 		if (!rootStat.isDirectory()) throw new Error("root must be a directory");
-		const files = await enumerateMarkdownFiles(realRoot);
+		const files = await enumerateMarkdownFiles(realRoot, exclude);
 		const fileSet = new Set(files.map(file => path.relative(realRoot, file).split(path.sep).join("/")));
 		const docs: ProjectDocMetadata[] = [];
+		const excludeMatchers = exclude.map(pattern => new Bun.Glob(pattern));
 		for (const item of rawDocs) {
 			if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("docs entries must be objects");
 			const doc = item as Record<string, unknown>;
 			if (typeof doc.path !== "string") throw new Error("docs entry path must be a string");
 			const relativePath = validateRelative(doc.path, "docs entry path");
+			if (excludeMatchers.some(matcher => matcher.match(relativePath)))
+				throw new Error(`docs entry is excluded by an exclude pattern: ${relativePath}`);
 			if (!relativePath.endsWith(".md") || !fileSet.has(relativePath))
 				throw new Error(`docs entry does not exist: ${relativePath}`);
 			const title = sanitizeText(doc.title, "title");
@@ -178,6 +225,7 @@ export async function loadProjectDocsManifest(cwd: string = getProjectDir()): Pr
 			scheme,
 			root,
 			...(description === undefined ? {} : { description }),
+			exclude,
 			docs,
 			repoRoot: realRepoRoot,
 			realRoot,
@@ -189,7 +237,7 @@ export async function loadProjectDocsManifest(cwd: string = getProjectDir()): Pr
 }
 
 export async function listProjectDocsFiles(manifest: ProjectDocsManifest): Promise<string[]> {
-	return enumerateMarkdownFiles(manifest.realRoot);
+	return enumerateMarkdownFiles(manifest.realRoot, manifest.exclude);
 }
 
 export function projectDocsManifestPath(repoRoot: string): string {
