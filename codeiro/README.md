@@ -7,14 +7,17 @@ branch a partir de uma tag estável do upstream.
 ## Como o updater decide
 
 `omp update` só usa o caminho source-build quando existe um `codeiro-omp.json`
-**ao lado do binário em execução** (`process.execPath`). Sem esse arquivo o
-updater oficial roda inalterado — npm, bun, brew, mise e binário continuam
-como no upstream, e a notificação de nova versão continua olhando os releases
-oficiais.
+**ao lado do binário em execução** (`process.execPath`) e esse binário se chama
+`omp` ou `codeiro-omp` — os dois nomes que a distribuição instala. A lista é
+branca de propósito: um interpretador (`bun src/cli.ts`) nunca adota o
+manifesto que esteja ao lado dele. Sem manifesto o updater oficial roda
+inalterado — npm, bun, brew, mise e binário continuam como no upstream, e a
+notificação de nova versão continua olhando os releases oficiais.
 
 Com o manifesto:
 
-- `omp update --check` lê `releases/latest` do `upstreamRepo` e não escreve nada.
+- `omp update --check` lê `releases/latest` do `upstreamRepo` e resolve o
+  `patchRef` por `git ls-remote`; as duas são leituras e nada é escrito.
 - `omp update` monta um staging fora do diretório de instalação, faz checkout
   exato da tag estável, aplica a série de patches, instala dependências
   congeladas, builda o binário do host, valida o `--version` do artefato e só
@@ -23,14 +26,42 @@ Com o manifesto:
 Qualquer falha na série (arquivo ausente, série vazia, patch que não aplica)
 aborta o update: nunca instala um binário oficial sem os patches.
 
+### Quando a série muda sem mudar a versão
+
+A versão do upstream não identifica um artefato do fork: uma série nova sobre a
+mesma tag produz um binário diferente com o mesmo `--version`. Por isso o
+update grava um `codeiro-omp.lock.json` ao lado do binário, com a tag upstream,
+o `patchRef` e o commit resolvido dele. Numa release igual à instalada, o
+updater só responde `Already up to date` quando os quatro campos batem; lock
+ausente, ilegível ou divergente reconstrói sem precisar de `--force`. Se o
+install estiver à frente do upstream, nada é reconstruído sem `--force`:
+rebuildar ali seria downgrade.
+
+O lock é escrito depois da troca bem-sucedida — se a troca falha, o binário
+antigo e o lock que o descreve continuam coerentes. Falha ao gravar o lock só
+custa uma reconstrução redundante e por isso avisa em vez de abortar.
+
+### Instalação do fork nunca é sobrescrita pelo fluxo oficial
+
+O desvio acima olha o binário **em execução**, mas o fluxo oficial escreve no
+`omp` que o PATH resolve, que pode ser outro. Antes de instalar, o updater
+oficial recusa o alvo quando há um `codeiro-omp.json` ao lado dele e manda
+rodar o update pelo próprio binário do fork. Sem essa guarda um `omp update`
+rodado a partir de um install oficial deixaria um binário sem patches por cima
+do fork, silenciosamente, já que os dois reportam a mesma versão.
+
 ## Instalar em uma máquina
 
 ```sh
-install -m 0644 codeiro/codeiro-omp.json "$(dirname "$(readlink -f "$(command -v omp)")")/codeiro-omp.json"
+# use o nome com que este fork foi instalado: `codeiro-omp` ou `omp`
+bin=$(command -v codeiro-omp || command -v omp)
+install -m 0644 codeiro/codeiro-omp.json "$(dirname "$(readlink -f "$bin")")/codeiro-omp.json"
 ```
 
-O manifesto precisa ficar junto do binário real: se o `omp` do PATH é um
+O manifesto precisa ficar junto do binário real: se o binário do PATH é um
 symlink, `process.execPath` resolve para o alvo, e é lá que o arquivo é lido.
+Um install chamado `omp` também é o alvo do fluxo oficial (`$which("omp")`), e
+é dele que a guarda de sobrescrita protege.
 
 Campos:
 

@@ -3,12 +3,14 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	CODEIRO_LOCK_FILENAME,
 	CODEIRO_MANIFEST_FILENAME,
 	type CodeiroInstall,
 	type CodeiroUpdateDeps,
 	ensureNativeAddonDirectoryChain,
 	loadCodeiroInstall,
 	parseCodeiroManifest,
+	parseLsRemote,
 	parsePatchSeries,
 	replaceNativeAddonFile,
 	resolveLatestStableRelease,
@@ -112,19 +114,53 @@ describe("resolveManifestCandidates", () => {
 		["/opt/codeiro/bin/omp", ["/opt/codeiro/bin/omp"]],
 		["/opt/codeiro/bin/omp.exe", ["/opt/codeiro/bin/omp.exe"]],
 		["/opt/codeiro/bin/OMP", ["/opt/codeiro/bin/OMP"]],
+		["/Users/paulo/.local/bin/codeiro-omp", ["/Users/paulo/.local/bin/codeiro-omp"]],
+		["/opt/codeiro/bin/codeiro-omp.exe", ["/opt/codeiro/bin/codeiro-omp.exe"]],
 	])("adopts the running binary %s", (execPath, expected) => {
 		expect(resolveManifestCandidates(execPath)).toEqual(expected);
 	});
 
-	it.each(["/opt/homebrew/bin/bun", "/usr/local/bin/node", "/opt/codeiro/bin/omp-wrapper"])(
-		"ignores a non-omp host process %s",
-		execPath => {
-			expect(resolveManifestCandidates(execPath)).toEqual([]);
-		},
-	);
+	it.each([
+		"/opt/homebrew/bin/bun",
+		"/usr/local/bin/node",
+		"/opt/codeiro/bin/omp-wrapper",
+		"/opt/codeiro/bin/codeiro",
+		"/opt/codeiro/bin/codeiro-omp-wrapper",
+	])("ignores a non-omp host process %s", execPath => {
+		expect(resolveManifestCandidates(execPath)).toEqual([]);
+	});
 
 	it("ignores a missing exec path", () => {
 		expect(resolveManifestCandidates(undefined)).toEqual([]);
+	});
+});
+
+describe("parseLsRemote", () => {
+	const TAG = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+	const COMMIT = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+	it("prefers the dereferenced commit of an annotated tag", () => {
+		const stdout = `${TAG}\trefs/tags/codeiro-omp-v17.2.15-c4\n${COMMIT}\trefs/tags/codeiro-omp-v17.2.15-c4^{}\n`;
+
+		expect(parseLsRemote(stdout, "codeiro-omp-v17.2.15-c4")).toBe(COMMIT);
+	});
+
+	it("resolves a branch head", () => {
+		expect(parseLsRemote(`${COMMIT}\trefs/heads/codeiro\n`, "codeiro")).toBe(COMMIT);
+	});
+
+	it("ignores refs that merely share a prefix", () => {
+		const stdout = `${TAG}\trefs/heads/codeiro-next\n${COMMIT}\trefs/heads/codeiro\n`;
+
+		expect(parseLsRemote(stdout, "codeiro")).toBe(COMMIT);
+	});
+
+	it("throws when the ref is absent", () => {
+		expect(() => parseLsRemote(`${TAG}\trefs/heads/main\n`, "codeiro")).toThrow(/not found/);
+	});
+
+	it("rejects a row whose first field is not a commit", () => {
+		expect(() => parseLsRemote(`not-a-sha\trefs/heads/codeiro\n`, "codeiro")).toThrow(/not found/);
 	});
 });
 
@@ -392,6 +428,22 @@ describe("runCodeiroSourceUpdate --check", () => {
 		};
 	}
 
+	const SERIES_HEAD = "1111111111111111111111111111111111111111";
+	const stubPatchCommit = async () => SERIES_HEAD;
+
+	async function recordLock(install: CodeiroInstall, patchCommit: string): Promise<void> {
+		await fs.writeFile(
+			path.join(path.dirname(install.binaryPath), CODEIRO_LOCK_FILENAME),
+			JSON.stringify({
+				version: "17.2.13",
+				upstreamTag: "v17.2.13",
+				patchRef: VALID_MANIFEST.patchRef,
+				patchCommit,
+				builtAt: "2026-08-12T00:00:00.000Z",
+			}),
+		);
+	}
+
 	it("reads the upstream releases/latest endpoint and mutates nothing", async () => {
 		vi.spyOn(console, "log").mockImplementation(() => {});
 		const staging = path.join(await makeTempDir(), "staging");
@@ -404,6 +456,7 @@ describe("runCodeiroSourceUpdate --check", () => {
 			check: true,
 			deps: unusableDeps(),
 			fetchImpl: releaseFetch("999.0.0", seen),
+			resolvePatchCommitImpl: stubPatchCommit,
 			currentVersion: "17.2.13",
 		});
 
@@ -411,7 +464,62 @@ describe("runCodeiroSourceUpdate --check", () => {
 		await expect(fs.stat(staging)).rejects.toThrow();
 	});
 
-	it("stops at the up-to-date check without staging anything", async () => {
+	it("stops at the up-to-date check when the lock matches the resolved series", async () => {
+		const logs: string[] = [];
+		vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const staging = path.join(await makeTempDir(), "staging");
+		const install = await makeInstall(staging);
+		await recordLock(install, SERIES_HEAD);
+
+		await runCodeiroSourceUpdate({
+			install,
+			force: false,
+			check: false,
+			deps: unusableDeps(),
+			fetchImpl: releaseFetch("17.2.13", []),
+			resolvePatchCommitImpl: stubPatchCommit,
+			currentVersion: "17.2.13",
+		});
+
+		expect(logs.some(line => line.includes("Already up to date"))).toBe(true);
+		await expect(fs.stat(staging)).rejects.toThrow();
+	});
+
+	it("rebuilds when the lock records a different patch ref", async () => {
+		const logs: string[] = [];
+		vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const staging = path.join(await makeTempDir(), "staging");
+		const install = await makeInstall(staging);
+		await fs.writeFile(
+			path.join(path.dirname(install.binaryPath), CODEIRO_LOCK_FILENAME),
+			JSON.stringify({
+				version: "17.2.13",
+				upstreamTag: "v17.2.13",
+				patchRef: "codeiro-omp-v17.2.13-c1",
+				patchCommit: SERIES_HEAD,
+				builtAt: "2026-08-12T00:00:00.000Z",
+			}),
+		);
+
+		await runCodeiroSourceUpdate({
+			install,
+			force: false,
+			check: true,
+			deps: unusableDeps(),
+			fetchImpl: releaseFetch("17.2.13", []),
+			resolvePatchCommitImpl: stubPatchCommit,
+			currentVersion: "17.2.13",
+		});
+
+		expect(logs.some(line => line.includes("Already up to date"))).toBe(false);
+		await expect(fs.stat(staging)).rejects.toThrow();
+	});
+
+	it("stays up to date when the install is ahead of the upstream release", async () => {
 		const logs: string[] = [];
 		vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
 			logs.push(args.join(" "));
@@ -424,11 +532,59 @@ describe("runCodeiroSourceUpdate --check", () => {
 			force: false,
 			check: false,
 			deps: unusableDeps(),
-			fetchImpl: releaseFetch("17.2.13", []),
+			fetchImpl: releaseFetch("17.2.12", []),
+			resolvePatchCommitImpl: stubPatchCommit,
 			currentVersion: "17.2.13",
 		});
 
 		expect(logs.some(line => line.includes("Already up to date"))).toBe(true);
+		await expect(fs.stat(staging)).rejects.toThrow();
+	});
+
+	it("rebuilds on the same version when the patch series moved", async () => {
+		const logs: string[] = [];
+		vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const staging = path.join(await makeTempDir(), "staging");
+		const install = await makeInstall(staging);
+		await recordLock(install, "2222222222222222222222222222222222222222");
+
+		await runCodeiroSourceUpdate({
+			install,
+			force: false,
+			check: true,
+			deps: unusableDeps(),
+			fetchImpl: releaseFetch("17.2.13", []),
+			resolvePatchCommitImpl: stubPatchCommit,
+			currentVersion: "17.2.13",
+		});
+
+		expect(logs.some(line => line.includes("Patch series moved"))).toBe(true);
+		expect(logs.some(line => line.includes("Already up to date"))).toBe(false);
+		await expect(fs.stat(staging)).rejects.toThrow();
+	});
+
+	it("rebuilds when no lock records what is installed", async () => {
+		const logs: string[] = [];
+		vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const staging = path.join(await makeTempDir(), "staging");
+		const install = await makeInstall(staging);
+
+		await runCodeiroSourceUpdate({
+			install,
+			force: false,
+			check: true,
+			deps: unusableDeps(),
+			fetchImpl: releaseFetch("17.2.13", []),
+			resolvePatchCommitImpl: stubPatchCommit,
+			currentVersion: "17.2.13",
+		});
+
+		expect(logs.some(line => line.includes(CODEIRO_LOCK_FILENAME))).toBe(true);
+		expect(logs.some(line => line.includes("Already up to date"))).toBe(false);
 		await expect(fs.stat(staging)).rejects.toThrow();
 	});
 
@@ -446,6 +602,7 @@ describe("runCodeiroSourceUpdate --check", () => {
 			check: true,
 			deps: unusableDeps(),
 			fetchImpl: releaseFetch("17.2.13", []),
+			resolvePatchCommitImpl: stubPatchCommit,
 			currentVersion: "17.2.13",
 		});
 

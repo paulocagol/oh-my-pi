@@ -15,7 +15,12 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { $ } from "bun";
 import { theme } from "../modes/theme/theme";
 import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
-import { loadCodeiroInstall, resolveManifestCandidates, runCodeiroSourceUpdate } from "./codeiro-source-update";
+import {
+	CODEIRO_DISTRIBUTION,
+	loadCodeiroInstall,
+	resolveManifestCandidates,
+	runCodeiroSourceUpdate,
+} from "./codeiro-source-update";
 
 const REPO = "can1357/oh-my-pi";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
@@ -1366,6 +1371,22 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
 	if (opts.check) {
 		// Just check, don't install
 		return;
+	}
+
+	// Fail-closed guard on the install path: the hook above only inspects the
+	// *running* binary, but everything below writes to whatever `omp` resolves
+	// to in PATH. When that target is a fork install, the official flow would
+	// drop an unpatched binary over it - silently, since both report the same
+	// version. `--check` returned already, so this never blocks a read.
+	const targetInstall = await loadCodeiroInstall(resolveManifestCandidates(resolveOmpPath()));
+	if (targetInstall) {
+		console.error(
+			chalk.red(
+				`Refusing to update: ${targetInstall.binaryPath} is a ${CODEIRO_DISTRIBUTION} install (${targetInstall.manifestPath}).`,
+			),
+		);
+		console.error(chalk.dim(`Update it through its own binary: ${targetInstall.binaryPath} update`));
+		process.exit(1);
 	}
 
 	// Choose update method based on the prioritized omp binary in PATH. For
