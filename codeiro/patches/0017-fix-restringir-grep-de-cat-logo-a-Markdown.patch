@@ -1,0 +1,252 @@
+From e43cae7df06188fb80c1b21b80416d352f0b1537 Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Wed, 12 Aug 2026 12:37:57 -0300
+Subject: [PATCH 17/17] =?UTF-8?q?fix:=20restringir=20grep=20de=20cat=C3=A1?=
+ =?UTF-8?q?logo=20a=20Markdown?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A raiz de um catálogo project-docs resolve a um diretório físico. Sem filtro,
+o GrepTool recursava também em assets como flow.js e logo.png, embora o
+protocolo só indexe e resolva documentos Markdown. O recurso agora informa o
+glob **/*.md e o consumidor o aplica ao escopo nativo; os testes provam que
+assets não vazam no resultado.
+
+Também corrige duas bordas do novo caminho: --glob= vazio é rejeitado como
+flag sem equivalente, e descoberta MCP percorre todos os itens separados por
+ponto e vírgula. O parser comum de Flags.integer passa a validar a forma
+lexical inteira e o intervalo seguro, em vez de truncar 1.5, 1abc e 1e2; o
+gate existente continua rejeitando limites fora da faixa para URLs internas.
+---
+ .../coding-agent/src/cli/grep-internal-url.ts | 13 ++++--------
+ packages/coding-agent/src/cli/read-cli.ts     | 19 ++++++++++--------
+ .../internal-urls/project-docs-protocol.ts    |  1 +
+ .../coding-agent/src/internal-urls/types.ts   |  2 ++
+ packages/coding-agent/src/tools/grep.ts       |  2 +-
+ .../test/cli/grep-internal-url.test.ts        | 11 ++++++++++
+ .../test/tools/grep-project-docs.test.ts      |  4 ++++
+ packages/utils/src/cli.ts                     |  8 ++++++--
+ packages/utils/test/cli-help.test.ts          | 20 +++++++++++++++++++
+ 9 files changed, 60 insertions(+), 20 deletions(-)
+
+diff --git a/packages/coding-agent/src/cli/grep-internal-url.ts b/packages/coding-agent/src/cli/grep-internal-url.ts
+index 63fdac9f5a..eb9214880b 100644
+--- a/packages/coding-agent/src/cli/grep-internal-url.ts
++++ b/packages/coding-agent/src/cli/grep-internal-url.ts
+@@ -32,14 +32,9 @@ import { shouldDiscoverMcp } from "./read-cli";
+ const URL_ENTRY_RE = /(?:^|;)\s*[a-z][a-z0-9+.-]*:\/\//i;
+ 
+ /**
+- * `Flags.integer` rejects non-numeric input but accepts `--limit=0`,
+- * `--limit=-5` and `--context=-1`. `GrepToolOptions` then clamps them —
+- * `Math.max(1, limit)`, `Math.max(0, context)` — so a zero or negative flag
+- * quietly collapses the search to a single match, or drops the context the
+- * native branch would have printed. `NaN`, reachable from a programmatic
+- * caller, windows the search down to zero files and reports "No matches
+- * found" over real ones. Each is a wrong answer carrying a success exit
+- * code, so reject at the edge instead of clamping.
++ * `Flags.integer` validates lexical values before this branch. The direct
++ * helper still rejects NaN and out-of-range values because tests and SDK users
++ * can call it without the command parser.
+  */
+ function requireBounded(value: number, flag: string, min: number): number {
+ 	if (!Number.isInteger(value) || value < min) {
+@@ -84,7 +79,7 @@ export async function runInternalUrlGrep(cmd: GrepCommandArgs): Promise<boolean>
+ 		// Flags with no `GrepTool` equivalent. Rejecting beats returning a result
+ 		// the flag never shaped; the throw also keeps this check ahead of the
+ 		// search no matter how the function is later reordered.
+-		if (cmd.glob) throw new ToolError(`--glob is not supported for internal URLs: ${cmd.path}`);
++		if (cmd.glob !== undefined) throw new ToolError(`--glob is not supported for internal URLs: ${cmd.path}`);
+ 		if (cmd.mode !== GrepOutputMode.Content) {
+ 			throw new ToolError(`--files and --count are not supported for internal URLs: ${cmd.path}`);
+ 		}
+diff --git a/packages/coding-agent/src/cli/read-cli.ts b/packages/coding-agent/src/cli/read-cli.ts
+index 331d7d3f0e..abbdf9c997 100644
+--- a/packages/coding-agent/src/cli/read-cli.ts
++++ b/packages/coding-agent/src/cli/read-cli.ts
+@@ -25,14 +25,17 @@ export interface ReadCommandArgs {
+ }
+ 
+ export function shouldDiscoverMcp(path: string): boolean {
+-	// MCP resource URIs may be hierarchical (`test://notes`) or opaque
+-	// (`urn:example:document`); `extractUriScheme` recognizes both while
+-	// rejecting Windows drive paths and selector-shaped filesystem inputs.
+-	const scheme = extractUriScheme(path);
+-	if (!scheme) return false;
+-	if (scheme === "mcp") return true;
+-	if (["conflict", "file", "http", "https"].includes(scheme)) return false;
+-	return InternalUrlRouter.instance().getHandler(scheme) === undefined;
++	// Grep accepts semicolon-delimited paths. Inspect every entry so an MCP
++	// resource after a filesystem/project-docs entry cannot bypass discovery.
++	for (const entry of path.split(";")) {
++		const scheme = extractUriScheme(entry.trim());
++		if (!scheme) continue;
++		const normalized = scheme.toLowerCase();
++		if (normalized === "mcp") return true;
++		if (["conflict", "file", "http", "https"].includes(normalized)) continue;
++		if (InternalUrlRouter.instance().getHandler(normalized) === undefined) return true;
++	}
++	return false;
+ }
+ 
+ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
+diff --git a/packages/coding-agent/src/internal-urls/project-docs-protocol.ts b/packages/coding-agent/src/internal-urls/project-docs-protocol.ts
+index c8513634af..be1f399be7 100644
+--- a/packages/coding-agent/src/internal-urls/project-docs-protocol.ts
++++ b/packages/coding-agent/src/internal-urls/project-docs-protocol.ts
+@@ -98,6 +98,7 @@ export class ProjectDocsProtocolHandler implements ProtocolHandler {
+ 				contentType: "text/markdown",
+ 				size: Buffer.byteLength(content, "utf8"),
+ 				sourcePath: manifest.realRoot,
++				searchGlob: "**/*.md",
+ 				isDirectory: true,
+ 				immutable: true,
+ 			};
+diff --git a/packages/coding-agent/src/internal-urls/types.ts b/packages/coding-agent/src/internal-urls/types.ts
+index d03e527847..4071a62042 100644
+--- a/packages/coding-agent/src/internal-urls/types.ts
++++ b/packages/coding-agent/src/internal-urls/types.ts
+@@ -24,6 +24,8 @@ export interface InternalResource {
+ 	size?: number;
+ 	/** Underlying filesystem path (for debugging, not exposed to agent) */
+ 	sourcePath?: string;
++	/** Optional glob applied below sourcePath when search enumerates a directory. */
++	searchGlob?: string;
+ 	/** Additional notes about resolution */
+ 	notes?: string[];
+ 	/**
+diff --git a/packages/coding-agent/src/tools/grep.ts b/packages/coding-agent/src/tools/grep.ts
+index d8076a8bce..7b683be704 100644
+--- a/packages/coding-agent/src/tools/grep.ts
++++ b/packages/coding-agent/src/tools/grep.ts
+@@ -813,7 +813,7 @@ async function resolveInternalSearchInputs(opts: {
+ 			);
+ 		}
+ 		if (resource.sourcePath) {
+-			paths[idx] = resource.sourcePath;
++			paths[idx] = resource.searchGlob ? path.join(resource.sourcePath, resource.searchGlob) : resource.sourcePath;
+ 			if (resource.immutable) {
+ 				immutableSourcePaths.add(path.resolve(resource.sourcePath));
+ 			}
+diff --git a/packages/coding-agent/test/cli/grep-internal-url.test.ts b/packages/coding-agent/test/cli/grep-internal-url.test.ts
+index f2490b5b4f..4ba600bcb5 100644
+--- a/packages/coding-agent/test/cli/grep-internal-url.test.ts
++++ b/packages/coding-agent/test/cli/grep-internal-url.test.ts
+@@ -8,6 +8,7 @@ import { GrepOutputMode } from "@oh-my-pi/pi-natives";
+ import { setProjectDir } from "@oh-my-pi/pi-utils";
+ import { type GrepCommandArgs, runGrepCommand } from "../../src/cli/grep-cli";
+ import { runInternalUrlGrep } from "../../src/cli/grep-internal-url";
++import { shouldDiscoverMcp } from "../../src/cli/read-cli";
+ import { initTheme } from "../../src/modes/theme/theme";
+ 
+ interface Run {
+@@ -87,6 +88,8 @@ describe("omp grep internal-URL branch", () => {
+ 		);
+ 		await Bun.write(path.join(root, "docs", "index.md"), "nothing here\n");
+ 		await Bun.write(path.join(root, "docs", "nested", "guide.md"), "nested needle\n");
++		await Bun.write(path.join(root, "docs", "nested", "flow.js"), "// asset needle\n");
++		await Bun.write(path.join(root, "docs", "logo.png"), "asset needle\n");
+ 		await Bun.write(path.join(root, "outside.md"), "needle outside the catalog\n");
+ 		setProjectDir(root);
+ 		await initTheme();
+@@ -110,6 +113,9 @@ describe("omp grep internal-URL branch", () => {
+ 		expect(result.out).toContain("guide.md");
+ 		// `outside.md` sits in the repo but outside the catalog root.
+ 		expect(result.out).not.toContain("outside the catalog");
++		// Project-docs search is Markdown-only even when the docs root carries assets.
++		expect(result.out).not.toContain("flow.js");
++		expect(result.out).not.toContain("logo.png");
+ 		// The native summary belongs to the other branch and must not appear.
+ 		expect(result.out).not.toContain("Files searched:");
+ 	});
+@@ -155,6 +161,7 @@ describe("omp grep internal-URL branch", () => {
+ 
+ 		for (const [label, cmd] of [
+ 			["--glob", args({ path: "vitrine.se://", glob: "*.md" })],
++			["--empty glob", args({ path: "vitrine.se://", glob: "" })],
+ 			["--count", args({ path: "vitrine.se://", mode: GrepOutputMode.Count })],
+ 			["--files", args({ path: "vitrine.se://", mode: GrepOutputMode.FilesWithMatches })],
+ 		] as const) {
+@@ -204,4 +211,8 @@ describe("omp grep internal-URL branch", () => {
+ 		expect(rejected.exits).toEqual([1]);
+ 		expect(rejected.err).toContain("must be an integer");
+ 	});
++
++	it("discovers MCP when it is not the first semicolon-delimited entry", () => {
++		expect(shouldDiscoverMcp("docs/index.md; mcp://remote/resource")).toBe(true);
++	});
+ });
+diff --git a/packages/coding-agent/test/tools/grep-project-docs.test.ts b/packages/coding-agent/test/tools/grep-project-docs.test.ts
+index d2a5bb0cb0..88218b38b5 100644
+--- a/packages/coding-agent/test/tools/grep-project-docs.test.ts
++++ b/packages/coding-agent/test/tools/grep-project-docs.test.ts
+@@ -35,6 +35,8 @@ describe("GrepTool project-docs URLs", () => {
+ 		);
+ 		await Bun.write(path.join(root, "docs", "index.md"), "no match\n");
+ 		await Bun.write(path.join(root, "docs", "nested", "guide.md"), "nested needle\n");
++		await Bun.write(path.join(root, "docs", "nested", "flow.js"), "asset needle\n");
++		await Bun.write(path.join(root, "docs", "logo.png"), "asset needle\n");
+ 		await registerProjectDocSchemes(root);
+ 		const session: ToolSession = {
+ 			cwd: root,
+@@ -47,6 +49,8 @@ describe("GrepTool project-docs URLs", () => {
+ 		const output = textOf(result);
+ 		expect(output).toContain("guide.md");
+ 		expect(output).toContain("nested needle");
++		expect(output).not.toContain("flow.js");
++		expect(output).not.toContain("logo.png");
+ 		expect(output).not.toMatch(/\[.*#[0-9A-F]{4}\]/i);
+ 	});
+ });
+diff --git a/packages/utils/src/cli.ts b/packages/utils/src/cli.ts
+index 65a7a4d8a4..1b95883351 100644
+--- a/packages/utils/src/cli.ts
++++ b/packages/utils/src/cli.ts
+@@ -228,8 +228,12 @@ export abstract class Command {
+ 				if (raw === undefined || typeof raw === "boolean") {
+ 					flags[name] = desc.default ?? undefined;
+ 				} else {
+-					const n = Number.parseInt(raw as string, 10);
+-					if (Number.isNaN(n)) {
++					const text = raw as string;
++					if (!/^[+-]?\d+$/.test(text.trim())) {
++						throw new CliUsageError(`Expected integer for --${name}, got "${raw}"`);
++					}
++					const n = Number(text);
++					if (!Number.isSafeInteger(n)) {
+ 						throw new CliUsageError(`Expected integer for --${name}, got "${raw}"`);
+ 					}
+ 					flags[name] = n;
+diff --git a/packages/utils/test/cli-help.test.ts b/packages/utils/test/cli-help.test.ts
+index 80f9e5450c..fd4ad4bb54 100644
+--- a/packages/utils/test/cli-help.test.ts
++++ b/packages/utils/test/cli-help.test.ts
+@@ -184,4 +184,24 @@ describe("run() usage errors", () => {
+ 		expect(out).toContain("error: Unknown option '--unknown'");
+ 		expect(out).toContain("$ omp bench MODELS... [FLAGS]");
+ 	});
++	it("rejects fractional and suffixed integer flags instead of truncating them", async () => {
++		const commands: CommandEntry[] = [{ name: "bench", load: async () => BenchLikeCommand }];
++		for (const value of ["1.5", "1abc", "1e2"]) {
++			const errs: string[] = [];
++			const stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
++				errs.push(String(chunk));
++				return true;
++			});
++			const prevExitCode = process.exitCode;
++			try {
++				await expect(
++					run({ bin: "omp", version: "0.0.0", argv: ["bench", "model", `--runs=${value}`], commands }),
++				).resolves.toBeUndefined();
++			} finally {
++				stderrSpy.mockRestore();
++				process.exitCode = prevExitCode ?? 0;
++			}
++			expect(errs.join("")).toContain(`Expected integer for --runs, got "${value}"`);
++		}
++	});
+ });
+-- 
+2.55.0
+
