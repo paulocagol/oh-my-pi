@@ -8,6 +8,7 @@ import { GrepOutputMode, grep } from "@oh-my-pi/pi-natives";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { expandPath } from "../tools/path-utils";
+import { runInternalUrlGrep } from "./grep-internal-url";
 
 export interface GrepCommandArgs {
 	pattern: string;
@@ -73,6 +74,8 @@ export async function runGrepCommand(cmd: GrepCommandArgs): Promise<void> {
 		console.error(chalk.red("Error: Pattern is required"));
 		process.exit(1);
 	}
+
+	if (await runInternalUrlGrep(cmd)) return;
 
 	const searchPath = path.resolve(expandPath(cmd.path));
 	console.log(chalk.dim(`Searching in: ${searchPath}`));

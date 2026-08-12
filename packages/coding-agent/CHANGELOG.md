@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 - Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery. A docs root may carry the assets its Markdown links to — non-Markdown files are skipped, never indexed, and never resolvable — and `exclude` globs curate the generated index without becoming an access-control boundary.
+- Routed the `omp grep` subcommand through the agent's grep tool whenever its path is an internal URL, so `omp grep <pattern> vitrine.se://` searches the catalog instead of failing against a nonexistent `<cwd>/vitrine.se:` path; virtual schemes such as `omp://` resolve too. Filesystem searches keep the native code path and output, while flags the tool cannot honor — `--glob`, `--files`, `--count`, and out-of-range `--limit`/`--context` — fail with an explicit error instead of returning a silently narrowed result.
 
 ## [17.2.15] - 2026-08-12
 

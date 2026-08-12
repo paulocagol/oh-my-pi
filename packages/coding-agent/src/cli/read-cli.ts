@@ -24,7 +24,7 @@ export interface ReadCommandArgs {
 	path: string;
 }
 
-function shouldDiscoverMcp(path: string): boolean {
+export function shouldDiscoverMcp(path: string): boolean {
 	// MCP resource URIs may be hierarchical (`test://notes`) or opaque
 	// (`urn:example:document`); `extractUriScheme` recognizes both while
 	// rejecting Windows drive paths and selector-shaped filesystem inputs.
