@@ -813,7 +813,7 @@ async function resolveInternalSearchInputs(opts: {
 			);
 		}
 		if (resource.sourcePath) {
-			paths[idx] = resource.sourcePath;
+			paths[idx] = resource.searchGlob ? path.join(resource.sourcePath, resource.searchGlob) : resource.sourcePath;
 			if (resource.immutable) {
 				immutableSourcePaths.add(path.resolve(resource.sourcePath));
 			}

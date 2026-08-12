@@ -25,14 +25,17 @@ export interface ReadCommandArgs {
 }
 
 export function shouldDiscoverMcp(path: string): boolean {
-	// MCP resource URIs may be hierarchical (`test://notes`) or opaque
-	// (`urn:example:document`); `extractUriScheme` recognizes both while
-	// rejecting Windows drive paths and selector-shaped filesystem inputs.
-	const scheme = extractUriScheme(path);
-	if (!scheme) return false;
-	if (scheme === "mcp") return true;
-	if (["conflict", "file", "http", "https"].includes(scheme)) return false;
-	return InternalUrlRouter.instance().getHandler(scheme) === undefined;
+	// Grep accepts semicolon-delimited paths. Inspect every entry so an MCP
+	// resource after a filesystem/project-docs entry cannot bypass discovery.
+	for (const entry of path.split(";")) {
+		const scheme = extractUriScheme(entry.trim());
+		if (!scheme) continue;
+		const normalized = scheme.toLowerCase();
+		if (normalized === "mcp") return true;
+		if (["conflict", "file", "http", "https"].includes(normalized)) continue;
+		if (InternalUrlRouter.instance().getHandler(normalized) === undefined) return true;
+	}
+	return false;
 }
 
 export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {

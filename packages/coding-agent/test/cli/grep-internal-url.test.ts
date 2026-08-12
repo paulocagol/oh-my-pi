@@ -8,6 +8,7 @@ import { GrepOutputMode } from "@oh-my-pi/pi-natives";
 import { setProjectDir } from "@oh-my-pi/pi-utils";
 import { type GrepCommandArgs, runGrepCommand } from "../../src/cli/grep-cli";
 import { runInternalUrlGrep } from "../../src/cli/grep-internal-url";
+import { shouldDiscoverMcp } from "../../src/cli/read-cli";
 import { initTheme } from "../../src/modes/theme/theme";
 
 interface Run {
@@ -87,6 +88,8 @@ describe("omp grep internal-URL branch", () => {
 		);
 		await Bun.write(path.join(root, "docs", "index.md"), "nothing here\n");
 		await Bun.write(path.join(root, "docs", "nested", "guide.md"), "nested needle\n");
+		await Bun.write(path.join(root, "docs", "nested", "flow.js"), "// asset needle\n");
+		await Bun.write(path.join(root, "docs", "logo.png"), "asset needle\n");
 		await Bun.write(path.join(root, "outside.md"), "needle outside the catalog\n");
 		setProjectDir(root);
 		await initTheme();
@@ -110,6 +113,9 @@ describe("omp grep internal-URL branch", () => {
 		expect(result.out).toContain("guide.md");
 		// `outside.md` sits in the repo but outside the catalog root.
 		expect(result.out).not.toContain("outside the catalog");
+		// Project-docs search is Markdown-only even when the docs root carries assets.
+		expect(result.out).not.toContain("flow.js");
+		expect(result.out).not.toContain("logo.png");
 		// The native summary belongs to the other branch and must not appear.
 		expect(result.out).not.toContain("Files searched:");
 	});
@@ -155,6 +161,7 @@ describe("omp grep internal-URL branch", () => {
 
 		for (const [label, cmd] of [
 			["--glob", args({ path: "vitrine.se://", glob: "*.md" })],
+			["--empty glob", args({ path: "vitrine.se://", glob: "" })],
 			["--count", args({ path: "vitrine.se://", mode: GrepOutputMode.Count })],
 			["--files", args({ path: "vitrine.se://", mode: GrepOutputMode.FilesWithMatches })],
 		] as const) {
@@ -203,5 +210,9 @@ describe("omp grep internal-URL branch", () => {
 		const rejected = await runCommand({ path: "vitrine.se://", limit: 0 });
 		expect(rejected.exits).toEqual([1]);
 		expect(rejected.err).toContain("must be an integer");
+	});
+
+	it("discovers MCP when it is not the first semicolon-delimited entry", () => {
+		expect(shouldDiscoverMcp("docs/index.md; mcp://remote/resource")).toBe(true);
 	});
 });

@@ -98,6 +98,7 @@ export class ProjectDocsProtocolHandler implements ProtocolHandler {
 				contentType: "text/markdown",
 				size: Buffer.byteLength(content, "utf8"),
 				sourcePath: manifest.realRoot,
+				searchGlob: "**/*.md",
 				isDirectory: true,
 				immutable: true,
 			};

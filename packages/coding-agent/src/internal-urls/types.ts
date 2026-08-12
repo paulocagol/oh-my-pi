@@ -24,6 +24,8 @@ export interface InternalResource {
 	size?: number;
 	/** Underlying filesystem path (for debugging, not exposed to agent) */
 	sourcePath?: string;
+	/** Optional glob applied below sourcePath when search enumerates a directory. */
+	searchGlob?: string;
 	/** Additional notes about resolution */
 	notes?: string[];
 	/**

@@ -35,6 +35,8 @@ describe("GrepTool project-docs URLs", () => {
 		);
 		await Bun.write(path.join(root, "docs", "index.md"), "no match\n");
 		await Bun.write(path.join(root, "docs", "nested", "guide.md"), "nested needle\n");
+		await Bun.write(path.join(root, "docs", "nested", "flow.js"), "asset needle\n");
+		await Bun.write(path.join(root, "docs", "logo.png"), "asset needle\n");
 		await registerProjectDocSchemes(root);
 		const session: ToolSession = {
 			cwd: root,
@@ -47,6 +49,8 @@ describe("GrepTool project-docs URLs", () => {
 		const output = textOf(result);
 		expect(output).toContain("guide.md");
 		expect(output).toContain("nested needle");
+		expect(output).not.toContain("flow.js");
+		expect(output).not.toContain("logo.png");
 		expect(output).not.toMatch(/\[.*#[0-9A-F]{4}\]/i);
 	});
 });

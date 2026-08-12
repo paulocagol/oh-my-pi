@@ -228,8 +228,12 @@ export abstract class Command {
 				if (raw === undefined || typeof raw === "boolean") {
 					flags[name] = desc.default ?? undefined;
 				} else {
-					const n = Number.parseInt(raw as string, 10);
-					if (Number.isNaN(n)) {
+					const text = raw as string;
+					if (!/^[+-]?\d+$/.test(text.trim())) {
+						throw new CliUsageError(`Expected integer for --${name}, got "${raw}"`);
+					}
+					const n = Number(text);
+					if (!Number.isSafeInteger(n)) {
 						throw new CliUsageError(`Expected integer for --${name}, got "${raw}"`);
 					}
 					flags[name] = n;
