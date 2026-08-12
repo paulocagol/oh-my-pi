@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { setProjectDir } from "@oh-my-pi/pi-utils";
 import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
+import { registerProjectDocSchemes } from "../internal-urls/project-docs";
 import { memoryStatsUnavailableMessage, resolveMemoryBackend } from "../memory-backend";
 import type { FreshSessionResult } from "../session/agent-session";
 import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
@@ -414,6 +415,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 				return usage(`Move failed: ${errorMessage(err)}`, runtime);
 			}
 			setProjectDir(resolvedPath);
+			await registerProjectDocSchemes(resolvedPath);
 			await runtime.settings.reloadForCwd(resolvedPath);
 			applyProviderGlobalsFromSettings(runtime.settings);
 			// Reload plugin/capability caches so the next prompt sees commands and

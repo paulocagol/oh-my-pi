@@ -82,6 +82,7 @@ import type { Skill } from "../extensibility/skills";
 import { loadSlashCommands } from "../extensibility/slash-commands";
 import type { Goal, GoalModeState } from "../goals/state";
 import { resolveLocalUrlToPath } from "../internal-urls";
+import { registerProjectDocSchemes } from "../internal-urls/project-docs";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import type { MCPManager } from "../mcp";
 import {
@@ -1383,6 +1384,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.refreshSkillState();
 		await this.refreshSlashCommandState(newCwd);
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
+		await registerProjectDocSchemes(newCwd);
 		this.statusLine.applyCwdChange();
 	}
 
