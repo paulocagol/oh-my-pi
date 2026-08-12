@@ -127,18 +127,25 @@ describe("settings layout", () => {
 	});
 
 	it("exposes usage-aware fallback as an opt-in advanced policy", () => {
-		const defs = getSettingsForTab("model").filter(def => def.path.startsWith("retry.usage"));
+		const defs = getSettingsForTab("model").filter(def =>
+			["retry.usageAwareFallback", "retry.turnBudgetUsd", "retry.usageReservePct", "retry.usageReservePolicy"].includes(
+				def.path,
+			),
+		);
 		expect(defs.map(def => def.path)).toEqual([
 			"retry.usageAwareFallback",
+			"retry.turnBudgetUsd",
 			"retry.usageReservePct",
 			"retry.usageReservePolicy",
 		]);
 		expect(defs[0]).toMatchObject({ type: "boolean", label: "Usage-Aware Fallback" });
 		expect(defs[1]?.condition?.()).toBe(false);
 		expect(defs[2]?.condition?.()).toBe(false);
+		expect(defs[3]?.condition?.()).toBe(false);
 		Settings.instance.set("retry.usageAwareFallback", true);
 		expect(defs[1]?.condition?.()).toBe(true);
 		expect(defs[2]?.condition?.()).toBe(true);
+		expect(defs[3]?.condition?.()).toBe(true);
 	});
 
 	it("exposes ask.enabled as a boolean under Available Tools", () => {

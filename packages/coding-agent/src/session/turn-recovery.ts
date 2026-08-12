@@ -62,6 +62,7 @@ import {
 	validateRetryFallbackChains,
 } from "./retry-fallback-chains";
 import { getLatestCompactionEntry } from "./session-context";
+import { decideBudgetDowngrade, turnSpendUsd } from "./turn-budget";
 import { EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 import { sameMessageContent, sessionMessagePersistenceKey } from "./turn-persistence";
@@ -1289,10 +1290,14 @@ export class TurnRecovery {
 				model: currentModel.id,
 				error: String(error),
 			});
-			return false;
+			health = { state: "unknown", accounts: [] };
 		}
 		if (signal.aborted || !modelsAreEqual(this.#host.model(), currentModel)) return false;
 		const selectedAccount = health.accounts.find(account => account.selected);
+		const budgetDecision = decideBudgetDowngrade(
+			turnSpendUsd(this.#host.agent.state.messages),
+			this.#host.settings.get("retry.turnBudgetUsd"),
+		);
 		if (health.state === "healthy") {
 			this.#usageReserveApprovedSelector = undefined;
 			if (
@@ -1305,16 +1310,16 @@ export class TurnRecovery {
 					this.#host.sessionId(),
 				);
 			}
-			return false;
+			if (!budgetDecision.downgrade) return false;
 		}
 		if (health.state === "unknown") {
 			this.#usageReserveApprovedSelector = undefined;
-			return false;
+			if (!budgetDecision.downgrade) return false;
 		}
 		if (health.state !== "reserve") this.#usageReserveApprovedSelector = undefined;
 
 		const reservePolicy = this.#host.settings.get("retry.usageReservePolicy");
-		if (reservePolicy === "fail-closed") {
+		if (reservePolicy === "fail-closed" && (health.state === "reserve" || health.state === "depleted")) {
 			const condition = health.state === "reserve" ? "reserve reached" : "usage depleted";
 			throw new Error(
 				`${USAGE_PREFLIGHT_BLOCKED_PREFIX} ${condition} for ${currentSelector}; reserve policy is fail-closed.`,
@@ -1384,7 +1389,8 @@ export class TurnRecovery {
 		}
 		if (!fallback) return false;
 
-		let shouldFallback = health.state === "depleted" || reservePolicy === "auto" || !confirmer;
+		let shouldFallback =
+			budgetDecision.downgrade || health.state === "depleted" || reservePolicy === "auto" || !confirmer;
 		if (!shouldFallback && health.state === "reserve" && confirmer) {
 			const remainingFraction =
 				selectedAccount?.remainingFraction ??
@@ -1408,6 +1414,13 @@ export class TurnRecovery {
 			return false;
 		}
 		this.#usageReserveApprovedSelector = undefined;
+		if (budgetDecision.downgrade) {
+			logger.debug("Usage-aware turn budget downgrade", {
+				from: currentSelector,
+				to: fallback.selector.raw,
+				reason: budgetDecision.reason,
+			});
+		}
 		return this.applyRetryFallbackCandidate(role, fallback.selector, currentSelector, {
 			pinFallback: true,
 			apiKey: fallback.apiKey,

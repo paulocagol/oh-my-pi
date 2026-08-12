@@ -1546,6 +1546,17 @@ export const SETTINGS_SCHEMA = {
 				"Use reliable coding-plan quota reports to prefer same-provider accounts, then configured fallback models, before a hard usage limit. Ordinary configured API keys are excluded.",
 		},
 	},
+	"retry.turnBudgetUsd": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "model",
+			group: "Retry & Fallback",
+			label: "Turn Budget",
+			description: "Downgrade to the next configured fallback after this turn spends more than this amount in USD.",
+			condition: "usageAwareFallbackEnabled",
+		},
+	},
 	"retry.usageReservePct": {
 		type: "number",
 		default: 10,
@@ -5700,6 +5711,7 @@ export interface RetrySettings {
 	maxDelayMs: number;
 	modelFallback: boolean;
 	usageAwareFallback: boolean;
+	turnBudgetUsd: number;
 	usageReservePct: number;
 	usageReservePolicy: "confirm" | "auto" | "fail-closed";
 }
