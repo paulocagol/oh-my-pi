@@ -557,6 +557,8 @@ export interface BuildSystemPromptOptions {
 	xdevDocs?: string;
 	/** Whether Auto-QA grievance reporting is enabled; renders the `xd://report_issue` note. */
 	autoQaEnabled?: boolean;
+	/** Registered project documentation URL scheme for the current repository. */
+	projectDocsScheme?: string;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -614,6 +616,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		xdevTools = [],
 		xdevDocs = "",
 		autoQaEnabled = false,
+		projectDocsScheme,
 		activeRepoContext: providedActiveRepoContext,
 	} = options;
 	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
@@ -893,6 +896,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		renderMermaid,
 		xdevTools,
 		hasDynamicXdevTools: xdevTools.some(mounted => mounted.dynamic === true),
+		projectDocsScheme,
 		xdevDocs,
 		autoQaEnabled,
 	};

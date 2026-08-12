@@ -32,7 +32,7 @@ const INTERNAL_URL_SELECTOR_PART_RE = new RegExp(
 // for an `ssh://host:port` that has no `/path`, so the port colon is never
 // mistaken for a selector (a real ssh selector trails the `/path`, e.g.
 // `ssh://h/f:1-5`).
-const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
+const BUILTIN_INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
 	agent: true,
 	artifact: true,
 	issue: true,
@@ -47,6 +47,19 @@ const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
 	ssh: true,
 	vault: true,
 };
+const additionalInternalSchemesWithSelectors = new Set<string>();
+
+export function registerSelectorScheme(scheme: string): void {
+	additionalInternalSchemesWithSelectors.add(scheme.trim().toLowerCase());
+}
+
+export function unregisterSelectorScheme(scheme: string): void {
+	additionalInternalSchemesWithSelectors.delete(scheme.trim().toLowerCase());
+}
+
+export function resetSelectorSchemesForTests(): void {
+	additionalInternalSchemesWithSelectors.clear();
+}
 // Schemes whose resource URIs are server-defined and may legitimately end
 // with selector-shaped tails (e.g. `:raw`, `:conflicts`, `:1-50`, `/:raw`).
 // `McpProtocolHandler` resolves by exact URI match (`r.uri === uri`), so
@@ -403,7 +416,8 @@ export function splitInternalUrlSel(rawPath: string): { path: string; sel?: stri
 	// legitimately end in selector-shaped tails. Forward verbatim — see
 	// OPAQUE_RESOURCE_SCHEMES.
 	if (OPAQUE_RESOURCE_SCHEMES.has(scheme)) return { path: rawPath };
-	if (!INTERNAL_SCHEMES_WITH_SELECTORS[scheme]) return { path: rawPath };
+	if (!BUILTIN_INTERNAL_SCHEMES_WITH_SELECTORS[scheme] && !additionalInternalSchemesWithSelectors.has(scheme))
+		return { path: rawPath };
 
 	const schemeEnd = schemeMatch[0].length;
 	// ssh:// authority carries an optional `:port`; with no `/path` after the
@@ -469,7 +483,8 @@ export function isInternalUrlPath(filePath: string): boolean {
 	for (const prefix of TOP_LEVEL_INTERNAL_URL_PREFIXES) {
 		if (expandedAndNormalized.startsWith(prefix)) return true;
 	}
-	return false;
+	const scheme = expandedAndNormalized.match(INTERNAL_URL_SCHEME_RE)?.[1]?.toLowerCase();
+	return scheme !== undefined && additionalInternalSchemesWithSelectors.has(scheme);
 }
 
 /**

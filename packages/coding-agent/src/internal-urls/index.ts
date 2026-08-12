@@ -18,6 +18,7 @@ export * from "./mcp-protocol";
 export * from "./memory-protocol";
 export * from "./omp-protocol";
 export * from "./parse";
+export * from "./project-docs";
 export * from "./router";
 export * from "./rule-protocol";
 export * from "./security-protocol";
