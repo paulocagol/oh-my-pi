@@ -755,14 +755,15 @@ export class UiHelpers {
 		const block = new TranscriptBlock();
 		block.addChild(new DynamicBorder(text => theme.fg("warning", text)));
 		const title = notice?.title ?? "Update Available";
-		// Upstream suggests a command; a fork install gets the reason instead,
-		// because there the command cannot produce the release yet.
+		// Upstream ends its sentence with "Run: " and lets the command finish the
+		// line; a fork notice is a full sentence, so the two need a separator.
 		const prefix = notice ? notice.body : `New version ${newVersion} is available. Run: `;
 		const command = notice?.command ?? (notice ? "" : "omp update");
+		const separator = command && prefix && !prefix.endsWith(" ") ? " " : "";
 		block.addChild(
-			new Text(`${title}\n${prefix}${command}`, 1, 0).setStyleFn(
+			new Text(`${title}\n${prefix}${separator}${command}`, 1, 0).setStyleFn(
 				() =>
-					`${theme.bold(theme.fg("warning", title))}\n${theme.fg("muted", prefix)}${theme.fg("accent", command)}`,
+					`${theme.bold(theme.fg("warning", title))}\n${theme.fg("muted", prefix)}${separator}${theme.fg("accent", command)}`,
 			),
 		);
 		block.addChild(new DynamicBorder(text => theme.fg("warning", text)));

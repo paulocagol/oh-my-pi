@@ -20,6 +20,7 @@ import {
 	parsePatchSeries,
 	parsePatchSeriesBase,
 	replaceNativeAddonFile,
+	requireTools,
 	resolveLatestStableRelease,
 	resolveManifestCandidates,
 	resolvePatchSeries,
@@ -43,6 +44,29 @@ async function makeTempDir(): Promise<string> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codeiro-source-update-test-"));
 	tempDirs.push(dir);
 	return dir;
+}
+
+/**
+ * Run with a replaced environment, restoring it afterwards.
+ *
+ * `$which` reads the live `PATH`, so proving the fallbacks requires actually
+ * changing it rather than stubbing a lookup - the point is the real resolution
+ * order, not a mock of it.
+ */
+async function withEnv<T>(env: Record<string, string | undefined>, body: () => Promise<T>): Promise<T> {
+	const saved = { ...process.env };
+	for (const [key, value] of Object.entries(env)) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
+	try {
+		return await body();
+	} finally {
+		for (const key of Object.keys(process.env)) {
+			if (!(key in saved)) delete process.env[key];
+		}
+		Object.assign(process.env, saved);
+	}
 }
 
 afterEach(async () => {
@@ -935,18 +959,20 @@ describe("startup notice on a fork install", () => {
 		expect(await describeCodeiroInstall(broken)).toBeUndefined();
 	});
 
-	it("names the series instead of suggesting a command that cannot work yet", () => {
+	it("points at the agent command that can actually produce the release", () => {
 		const notice = buildUpstreamReleaseNotice("17.3.0", {
 			patchRef: "codeiro-omp-v17.2.15-c8",
 			upstreamTag: "v17.2.15",
 		});
 
-		expect(notice.command).toBeUndefined();
+		// The bare updater cannot produce this release until the series moves,
+		// so the suggestion has to be the command that rebases it first.
+		expect(notice.command).toBe("/omp-update");
 		expect(notice.title).not.toContain("Update Available");
 		expect(notice.body).toContain("17.3.0");
 		expect(notice.body).toContain("codeiro-omp-v17.2.15-c8");
 		expect(notice.body).toContain("(v17.2.15)");
-		expect(notice.body).not.toContain("omp update");
+		expect(notice.body).toContain("rebased");
 		// The distribution name must not read as part of the series name.
 		expect(notice.body).not.toContain("codeiro-omp codeiro-omp");
 	});
@@ -954,7 +980,51 @@ describe("startup notice on a fork install", () => {
 	it("omits the built-from tag when no lock recorded it", () => {
 		const notice = buildUpstreamReleaseNotice("17.3.0", { patchRef: "codeiro" });
 
-		expect(notice.body).toContain("series codeiro;");
+		expect(notice.body).toContain("series codeiro,");
 		expect(notice.body).not.toContain("(");
+	});
+});
+
+describe("requireTools", () => {
+	/**
+	 * A PATH that carries git but no bun - the shape of an interactive shell on
+	 * a machine whose bun comes from a version manager, which is exactly where
+	 * the update used to die before touching a patch.
+	 */
+	async function gitOnlyPath(): Promise<string> {
+		const dir = await makeTempDir();
+		const git = Bun.which("git");
+		if (!git) throw new Error("this test needs git on PATH");
+		await fs.symlink(git, path.join(dir, "git"));
+		return dir;
+	}
+
+	it("uses the bun on PATH when there is one", async () => {
+		const resolved = await requireTools(process.cwd());
+
+		expect(resolved).toContain("bun");
+	});
+
+	it("finds the bun of the official installer prefix when PATH has none", async () => {
+		const binDir = await gitOnlyPath();
+		const prefix = await makeTempDir();
+		await fs.mkdir(path.join(prefix, "bin"), { recursive: true });
+		const bun = path.join(prefix, "bin", "bun");
+		await fs.writeFile(bun, "#!/bin/sh\n", { mode: 0o755 });
+		const env = { ...process.env, PATH: binDir, BUN_INSTALL: prefix, HOME: await makeTempDir() };
+
+		const resolved = await withEnv(env, () => requireTools(process.cwd()));
+
+		expect(resolved).toBe(bun);
+	});
+
+	it("explains where it looked and how to expose bun when nothing has one", async () => {
+		const binDir = await gitOnlyPath();
+		const env = { ...process.env, PATH: binDir, BUN_INSTALL: undefined, HOME: await makeTempDir() };
+
+		const failure = await withEnv(env, () => requireTools(process.cwd()).catch((err: unknown) => err));
+
+		expect(String(failure)).toContain("mise exec bun -- omp update");
+		expect(String(failure)).toContain("$BUN_INSTALL/bin/bun");
 	});
 });

@@ -496,13 +496,63 @@ async function runStreaming(command: string[], cwd: string, env?: NodeJS.Process
 function git(dir: string, args: string[]): Promise<string> {
 	return runChecked(["git", "-c", "advice.detachedHead=false", ...args], dir);
 }
-function requireTools(): void {
-	const missing: string[] = [];
-	if (!$which("git")) missing.push("git");
-	if (!$which("bun")) missing.push("bun");
-	if (missing.length > 0) {
-		throw new Error(`Source build requires ${missing.join(", ")} on PATH`);
+/**
+ * Places a `bun` good enough to build from source can be, beyond `PATH`.
+ *
+ * The host binary is standalone, so the person running the update has no
+ * reason to keep a `bun` on their interactive `PATH` - on this machine it
+ * lives under a version manager, and the update died on `requireTools`
+ * before touching a single patch. Each candidate is a documented install
+ * location, in the order that answers "which bun did the user mean": the
+ * explicit env var of the official installer, its default prefix, then the
+ * version manager's own answer for this directory.
+ */
+export async function bunCandidates(cwd: string): Promise<string[]> {
+	const found = $which("bun");
+	if (found) return [found];
+
+	const candidates: string[] = [];
+	const bunInstall = $env.BUN_INSTALL;
+	if (bunInstall) candidates.push(path.join(bunInstall, "bin", "bun"));
+	const home = $env.HOME;
+	if (home) {
+		candidates.push(path.join(home, ".bun", "bin", "bun"));
+		candidates.push(path.join(home, ".local", "share", "mise", "shims", "bun"));
 	}
+
+	// `mise which` answers for a directory, so it resolves the very toolchain
+	// the source tree pins - but only when the config is trusted, which is why
+	// the plain shim above is asked for too.
+	if ($which("mise")) {
+		const resolved = await runQuiet(["mise", "which", "bun"], cwd);
+		if (resolved.exitCode === 0) {
+			const line = resolved.stdout.trim();
+			if (line) candidates.push(line);
+		}
+	}
+	return candidates;
+}
+
+/**
+ * Resolve the toolchain the source build needs, or explain what is missing.
+ *
+ * Returns the `bun` to invoke: an absolute path when it came from outside
+ * `PATH`, so every child process gets the same one this check approved.
+ */
+export async function requireTools(cwd: string): Promise<string> {
+	if (!$which("git")) throw new Error("Source build requires git on PATH");
+
+	const candidates = await bunCandidates(cwd);
+	for (const candidate of candidates) {
+		if (candidate === "bun" || fs.existsSync(candidate)) return candidate;
+	}
+	throw new Error(
+		[
+			"Source build requires bun, which is not on PATH.",
+			"  Looked for: PATH, $BUN_INSTALL/bin/bun, ~/.bun/bin/bun, mise shims, `mise which bun`.",
+			"  Install it (https://bun.sh) or expose the one you have, e.g. `mise exec bun -- omp update`.",
+		].join("\n"),
+	);
 }
 
 /**
@@ -846,6 +896,16 @@ export async function applyPatchSeries(
 /** Recipe an agent follows to rebase the series onto a new upstream tag. */
 export const REBASE_RECIPE_PATH = "codeiro/docs/rebase-da-serie.md";
 
+/**
+ * Slash command that carries out the whole cycle from inside the agent.
+ *
+ * A rebase needs judgement - reading two versions of a hunk and deciding what
+ * the fork meant - which is work, not a step. This command owns that work and
+ * calls this very updater at the end, so the mechanical half stays here where
+ * it is fail-closed and reversible.
+ */
+export const SERIES_REBASE_COMMAND = "/omp-update";
+
 /** What a conflict report needs beyond the conflict itself. */
 export interface SeriesConflictContext {
 	/** Patches that applied before the conflict. */
@@ -898,7 +958,8 @@ export function formatSeriesConflictReport(conflict: PatchConflict, context: Ser
 		`${theme.status.error} Update not applied`,
 		`  Reason: ${reason}`,
 		`  Recipe: ${REBASE_RECIPE_PATH}`,
-		"  Re-running the update cannot change this; the series has to be rebased first.",
+		`  Next: ${SERIES_REBASE_COMMAND} inside the agent - it rebases the series, resolves this, and runs the update.`,
+		"  Re-running this command cannot change the outcome; the series has to be rebased first.",
 	);
 	return lines.join("\n");
 }
@@ -919,16 +980,21 @@ export class CodeiroUpdateAborted extends Error {}
  * platform native leaf) before delegating to the release build for the single
  * target that matches this host.
  */
-async function buildFromSource(sourceDir: string, target: SourceBuildTarget, version: string): Promise<string> {
+async function buildFromSource(
+	sourceDir: string,
+	target: SourceBuildTarget,
+	version: string,
+	bun: string,
+): Promise<string> {
 	console.log(chalk.dim("Installing frozen dependencies…"));
-	await runStreaming(["bun", "install", "--frozen-lockfile"], sourceDir);
+	await runStreaming([bun, "install", "--frozen-lockfile"], sourceDir);
 
 	console.log(chalk.dim(`Installing native addon ${version}…`));
 	await installPublishedNativeAddon(sourceDir, target, version);
 
 	const preservedOutputDir = path.join(sourceDir, ".codeiro-build-output");
 	console.log(chalk.dim(`Building ${APP_NAME} for ${target.id}…`));
-	await runStreaming(["bun", "scripts/ci-release-build-binaries.ts", "--targets", target.id], sourceDir, {
+	await runStreaming([bun, "scripts/ci-release-build-binaries.ts", "--targets", target.id], sourceDir, {
 		...Bun.env,
 		OMP_BUILD_OUTPUT_DIR: preservedOutputDir,
 	});
@@ -1089,10 +1155,12 @@ export interface UpstreamReleaseNotice {
 /**
  * Compose the startup notice for a fork install.
  *
- * It deliberately does not suggest `omp update`: on this distribution that
- * command only produces the new release once the series has been rebased onto
- * its tag, and suggesting it before that turns a working install into a failed
- * command the user has to interpret.
+ * It deliberately does not suggest the bare `omp update`: on this distribution
+ * that command only produces the new release once the series has been rebased
+ * onto its tag, and suggesting it before that turns a working install into a
+ * failed command the user has to interpret. What it suggests instead is the
+ * agent command that owns the rebase and then runs the update itself, which is
+ * the only path that can actually end in a new binary.
  */
 export function buildUpstreamReleaseNotice(
 	newVersion: string,
@@ -1101,7 +1169,8 @@ export function buildUpstreamReleaseNotice(
 	const base = identity.upstreamTag ? ` (${identity.upstreamTag})` : "";
 	return {
 		title: "Upstream release available",
-		body: `${newVersion} upstream. This ${CODEIRO_DISTRIBUTION} install uses series ${identity.patchRef}${base}; rebase it onto the new tag before updating.`,
+		body: `${newVersion} upstream. This ${CODEIRO_DISTRIBUTION} install uses series ${identity.patchRef}${base}, which has to be rebased onto the new tag first.`,
+		command: SERIES_REBASE_COMMAND,
 	};
 }
 
@@ -1198,7 +1267,9 @@ export async function runCodeiroSourceUpdate(options: {
 
 	const target = resolveSourceBuildTarget(process.platform, process.arch, deps.isMuslLinux());
 	const staging = resolveStagingLayout(manifest.sourceRoot, install.binaryPath);
-	requireTools();
+	// Before the staging tree exists, so a missing toolchain fails fast; the
+	// user's own directory is what resolves their version manager.
+	const bun = await requireTools(process.cwd());
 
 	await fs.promises.mkdir(staging.root, { recursive: true });
 
@@ -1238,7 +1309,7 @@ export async function runCodeiroSourceUpdate(options: {
 		);
 	}
 
-	const artifactPath = await buildFromSource(staging.sourceDir, target, release.version);
+	const artifactPath = await buildFromSource(staging.sourceDir, target, release.version, bun);
 
 	const verification = await deps.verifyBinaryAtPath(artifactPath, release.version);
 	if (!verification.ok) {
