@@ -22,6 +22,7 @@ import {
 	loadCodeiroInstall,
 	resolveManifestCandidates,
 	runCodeiroSourceUpdate,
+	SERIES_REBASE_COMMAND,
 } from "./codeiro-source-update";
 
 const REPO = "can1357/oh-my-pi";
@@ -1584,7 +1585,7 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
 				install: codeiroInstall,
 				force: opts.force,
 				check: opts.check,
-				deps: { isMuslLinux, verifyBinaryAtPath, replaceBinaryForUpdate, sweepStaleBackups },
+				deps: { isMuslLinux, verifyBinaryAtPath, replaceBinaryForUpdate, sweepStaleUpdateArtifacts },
 			});
 		} catch (err) {
 			// An aborted series already printed its verdict block in full;
@@ -1637,7 +1638,11 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
 				`Refusing to update: ${targetInstall.binaryPath} is a ${CODEIRO_DISTRIBUTION} install (${targetInstall.manifestPath}).`,
 			),
 		);
-		console.error(chalk.dim("Run `omp update` from the fork-selected runtime to rebuild the patched source tree."));
+		console.error(
+			chalk.dim(
+				`Run ${SERIES_REBASE_COMMAND} inside the agent: it rebases the patch series onto the new tag and then rebuilds this install from source.`,
+			),
+		);
 		process.exit(1);
 	}
 

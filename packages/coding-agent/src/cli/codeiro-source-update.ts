@@ -118,7 +118,7 @@ export interface CodeiroUpdateDeps {
 	isMuslLinux(): boolean;
 	verifyBinaryAtPath(binaryPath: string, expectedVersion: string): Promise<InstalledVersionVerification>;
 	replaceBinaryForUpdate(options: BinaryReplacementOptions): Promise<InstalledVersionVerification>;
-	sweepStaleBackups(targetPath: string): Promise<void>;
+	sweepStaleUpdateArtifacts(targetPath: string): Promise<void>;
 }
 
 function manifestError(source: string, detail: string): Error {
@@ -1039,7 +1039,7 @@ async function installBuiltBinary(
 		expectedVersion: release.version,
 		verifyInstalledVersion: expectedVersion => deps.verifyBinaryAtPath(targetPath, expectedVersion),
 	});
-	await deps.sweepStaleBackups(targetPath);
+	await deps.sweepStaleUpdateArtifacts(targetPath);
 }
 
 /**

@@ -695,7 +695,7 @@ describe("runCodeiroSourceUpdate --check", () => {
 			replaceBinaryForUpdate: () => {
 				throw new Error("check must not replace the binary");
 			},
-			sweepStaleBackups: () => {
+			sweepStaleUpdateArtifacts: () => {
 				throw new Error("check must not touch the install directory");
 			},
 		};
