@@ -1,11 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
-import { getProjectDir, prompt } from "@oh-my-pi/pi-utils";
+import { getProjectDir, logger, prompt } from "@oh-my-pi/pi-utils";
 import {
 	isValidManagedSkillName,
 	MANAGED_SKILLS_PROVIDER_ID,
 	sanitizeManagedDescription,
 } from "../autolearn/managed-skills";
+import { bumpSkillUse } from "../autolearn/skill-usage";
 import { skillCapability } from "../capability/skill";
 import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
@@ -489,10 +490,23 @@ function startsWithLocalExecutionPrefix(trimmedStart: string): boolean {
 export type SkillInvocationKind = "user" | "autoload";
 
 export async function buildSkillPromptMessage(
-	skill: Pick<Skill, "name" | "filePath" | "baseDir">,
+	skill: Pick<Skill, "name" | "filePath" | "baseDir" | "_source">,
 	args: string,
 	invocation: SkillInvocationKind = "user",
 ): Promise<BuiltSkillPromptMessage> {
+	// Injection — not discovery — is what "using" a skill means, and this is the
+	// single point every path funnels through (slash command, ACP, RPC, autoload).
+	// Managed skills only: authored skills are never curated, so telemetry on them
+	// would be data nothing reads. Fire-and-forget — a counter must never delay or
+	// fail a real turn.
+	if (skill._source?.provider === MANAGED_SKILLS_PROVIDER_ID) {
+		void bumpSkillUse(skill.name).catch(err => {
+			logger.warn("Managed-skill usage bump failed", {
+				name: skill.name,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
+	}
 	const content = await Bun.file(skill.filePath).text();
 	const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
 	const trimmedArgs = args.trim();
