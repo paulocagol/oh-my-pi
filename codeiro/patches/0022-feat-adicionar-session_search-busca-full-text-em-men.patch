@@ -1,0 +1,1424 @@
+From 4ac2ee88f315ebc9a0fb7f1780e2ae059292a1d3 Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Thu, 13 Aug 2026 08:44:41 -0300
+Subject: [PATCH 22/22] =?UTF-8?q?feat:=20adicionar=20session=5Fsearch,=20b?=
+ =?UTF-8?q?usca=20full-text=20em=20mensagens=20de=20sess=C3=B5es=20passada?=
+ =?UTF-8?q?s?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Recuperar "como resolvemos X mês passado" dependia do mnemopi ter retido
+aquilo. Busca direta no transcript é determinística e complementar: já
+tínhamos FTS5 em history-storage.ts, mas indexando o prompt digitado, não o
+conteúdo das mensagens.
+
+Índice (session-search-index.ts): FTS5 external-content sobre bun:sqlite em
+WAL, alimentado incrementalmente por SessionManager.appendMessage — sem
+rebuild, sem varrer JSONL. Escrita batchada por AsyncDrain(100), e o tool dá
+flush antes de ler para enxergar o que o turno atual acabou de gravar. Falha
+de indexação loga e nunca derruba o append.
+
+Tool (session-search.ts): três modos inferidos pelos argumentos, sem
+parâmetro mode. query -> discovery (BM25, um hit por sessão, dedupe por
+over-fetch); sessionId+aroundEntryId -> scroll; sessionId sozinho ->
+bookends (3 primeiras + 3 últimas); nenhum argumento -> sessões recentes.
+Zero chamada de modelo em qualquer caminho.
+
+Janelas paginam por posição dentro da sessão (id < anchor ORDER BY DESC),
+não por aritmética id BETWEEN anchor±n: os ids são globais e sessões
+concorrentes os intercalam, então o range devolveria menos linhas quanto
+mais ocupada estivesse a máquina.
+
+sessionSearch.enabled (default on) governa as duas metades — índice e tool.
+Não há backfill: sessão escrita com a flag desligada fica invisível depois.
+
+Inspirado em hermes_state_search.py e tools/session_search_tool.py do
+hermes-agent (Nous Research); auditoria em
+.claude/analyses/2026-08-13-hermes-vs-codeiro-omp.md.
+---
+ docs/settings.md                              |   4 +-
+ docs/tools/session_search.md                  |  71 ++++
+ packages/coding-agent/CHANGELOG.md            |   1 +
+ .../src/config/settings-schema.ts             |  14 +
+ .../src/prompts/tools/session-search.md       |  12 +
+ packages/coding-agent/src/session/messages.ts |   6 +-
+ .../src/session/session-manager.ts            |  45 +++
+ .../src/session/session-search-index.ts       | 361 ++++++++++++++++++
+ .../coding-agent/src/tools/builtin-names.ts   |   1 +
+ packages/coding-agent/src/tools/index.ts      |   3 +
+ .../coding-agent/src/tools/session-search.ts  | 163 ++++++++
+ .../test/session/session-search-index.test.ts | 337 ++++++++++++++++
+ .../test/tools/session-search.test.ts         | 175 +++++++++
+ packages/utils/src/dirs.ts                    |   5 +
+ 14 files changed, 1196 insertions(+), 2 deletions(-)
+ create mode 100644 docs/tools/session_search.md
+ create mode 100644 packages/coding-agent/src/prompts/tools/session-search.md
+ create mode 100644 packages/coding-agent/src/session/session-search-index.ts
+ create mode 100644 packages/coding-agent/src/tools/session-search.ts
+ create mode 100644 packages/coding-agent/test/session/session-search-index.test.ts
+ create mode 100644 packages/coding-agent/test/tools/session-search.test.ts
+
+diff --git a/docs/settings.md b/docs/settings.md
+index 3040822f4e..7df34eba8e 100644
+--- a/docs/settings.md
++++ b/docs/settings.md
+@@ -504,7 +504,9 @@ tools:
+ | `tools.artifactTailBytes`      | number  | `20`    | KB of tail kept inline on spill.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+ | `tools.artifactTailLines`      | number  | `500`   | Max tail lines kept inline on spill.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+ 
+-Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `astEdit.enabled`, `astGrep.enabled`, and `web_search.enabled`. The `inspect_image` tool is controlled by the tri-state `inspect_image.mode` (`auto`|`on`|`off`, default `auto`): `auto` exposes it only when the active model lacks native image input, and the `/vision` slash command overrides the mode per session.
++Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `astEdit.enabled`, `astGrep.enabled`, `web_search.enabled`, and `sessionSearch.enabled`. The `inspect_image` tool is controlled by the tri-state `inspect_image.mode` (`auto`|`on`|`off`, default `auto`): `auto` exposes it only when the active model lacks native image input, and the `/vision` slash command overrides the mode per session.
++
++`sessionSearch.enabled` (default `true`) is the one entry in that list that gates a write as well as a read: it controls both the `session_search` tool and the incremental index behind it, which records `user`/`assistant` message text into `~/.omp/agent/session-search.db` as sessions are appended. Turning it off stops indexing; sessions written while it was off stay invisible to later searches, because there is no backfill pass.
+ 
+ ### Window-scoped computer use
+ 
+diff --git a/docs/tools/session_search.md b/docs/tools/session_search.md
+new file mode 100644
+index 0000000000..d9d5b7ed3b
+--- /dev/null
++++ b/docs/tools/session_search.md
+@@ -0,0 +1,71 @@
++# session_search
++
++> Full-text search over the message content of past sessions.
++
++## Source
++- Entry: `packages/coding-agent/src/tools/session-search.ts`
++- Model-facing prompt: `packages/coding-agent/src/prompts/tools/session-search.md`
++- Index: `packages/coding-agent/src/session/session-search-index.ts`
++- Write hook: `SessionManager.appendMessage` → `#indexForSearch` (`packages/coding-agent/src/session/session-manager.ts`)
++- Database path: `getSessionSearchDbPath` (`packages/utils/src/dirs.ts`)
++
++## Registration / Visibility
++- Tool metadata: `approval = "read"`, `strict = true`, `loadMode = "discoverable"`. With `tools.xdev` on it mounts under `xd://session_search` rather than shipping its schema every request.
++- Registration requires `sessionSearch.enabled = true` (default `true`). The same flag gates the write side: turning it off stops indexing as well as exposing the tool.
++- Available at any task depth; subagents may use it like any other read tool.
++- Execution is single-shot and emits no progress updates.
++
++## Inputs
++
++| Field | Type | Required | Description |
++|---|---|---:|---|
++| `query` | `string` | No | Full-text query. Present ⇒ discovery mode. |
++| `sessionId` | `string` | No | Session to read. Present without `query` ⇒ scroll mode. |
++| `aroundEntryId` | `string` | No | Session entry to centre the scroll window on. Ignored without `sessionId`. |
++| `window` | `number` | No | Messages read either side of the scroll anchor. Default `10`, clamped to `1..50`. |
++
++There is no `mode` parameter: the mode is inferred from which arguments are present.
++
++## Outputs
++- Discovery: `details = { mode: "discovery", query, sessions }`. Text lists at most 5 sessions, each with the best-ranked match (`role`, `entry <id>`, FTS excerpt), a ±5-message window around it, and the session's bookends.
++- Scroll with an anchor: `details = { mode: "scroll", sessionId, aroundEntryId, messages }`. Text lists the window in session order, each line prefixed `<role> entry <id>:`.
++- Scroll without an anchor: `details = { mode: "scroll", sessionId, messages }`. Text lists the session's first and last messages only.
++- Browse: `details = { mode: "browse", sessions }`. Text lists up to 20 indexed sessions, most recently active first, with message count, last-activity timestamp, and the session's first user message.
++- Empty results are normal results, never `isError`.
++
++## Flow
++1. `SessionSearchTool.createIf(...)` exposes the tool only when `sessionSearch.enabled` is true.
++2. `execute` opens the `SessionSearchIndex` singleton and awaits `flush()` so writes queued by the current turn are visible.
++3. `query` present → `searchDiscovery(query, 5)`: the query is tokenized like FTS5's `unicode61` tokenizer, each token becomes a prefix term, rows come back ordered by BM25 `rank`, and the first hit per `session_id` wins (over-fetch factor 8, capped at 400 rows scanned).
++4. `sessionId` + `aroundEntryId` → `getScrollWindow(...)`: the entry id resolves to an index row id, then the window is taken by session-local position.
++5. `sessionId` alone → `getBookends(...)`: first 3 and last 3 messages, with no overlap when the session is shorter than 6.
++6. No arguments → `listRecentSessions(20)`: one grouped query over `messages`, ordered by newest row id.
++
++## Modes / Variants
++- **Discovery** (`query`): find a session by subject. One result per session, so a single long conversation cannot crowd out the rest.
++- **Scroll** (`sessionId` + `aroundEntryId`): page through a session after discovery. Re-anchor on the first or last returned entry to keep moving in that direction; windows overlap by the anchor itself.
++- **Browse** (no arguments): chronological list when there is nothing specific to search for.
++
++## Side Effects
++- Filesystem: reads (and, via `SessionManager`, writes) `<agent-dir>/session-search.db` — a WAL-mode SQLite database with a `messages` table and an external-content FTS5 index `messages_fts`. Default agent directory is `~/.omp/agent`.
++- Network: none.
++- Session state: none. The tool is read-only with respect to the current session.
++- Background work: none from the tool. Indexing happens on the append path through a 100 ms `AsyncDrain` batch.
++
++## Limits & Caps
++- Discovery returns at most 5 sessions; browse at most 20; scroll window is clamped to `1..50` per side.
++- Rendered message text is collapsed to one line and clipped at 400 characters.
++- Only `user` and `assistant` messages are indexed. Tool results, custom, hook, bash and python execution messages are skipped.
++- Only persisted sessions are indexed; in-memory managers contribute nothing.
++- Coverage starts when the setting is first enabled — there is no backfill of older `session.jsonl` files.
++
++## Errors
++- An unindexed `aroundEntryId` returns a normal result with `messages: 0`, not an error.
++- A query with no alphanumeric tokens returns no sessions.
++- A malformed FTS expression is logged at debug level and returns no sessions.
++- Index failures on the write path are logged and swallowed: indexing must never fail a persisted turn.
++
++## Notes
++- Distinct from prompt history (`packages/coding-agent/src/session/history-storage.ts`), which indexes typed prompts in `history.db`. Different table, different database, different consumer.
++- Search is 100% deterministic BM25; no model is called at any point.
++- Absence of a hit is not proof the work never happened — the session may predate indexing.
+diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
+index bf5a4201fa..134d259d83 100644
+--- a/packages/coding-agent/CHANGELOG.md
++++ b/packages/coding-agent/CHANGELOG.md
+@@ -6,6 +6,7 @@
+ - Added `/tui fullscreen`, a Claude Code-style alternate-screen surface for the live primary transcript: the editor and a hint/status footer stay pinned at the bottom while the transcript scrolls above them with `PgUp`/`PgDn`, `Shift+PgUp`/`Shift+PgDn` (jump prompt to prompt), `Ctrl+Home`/`Ctrl+End`, and the mouse wheel. A sticky header names the user prompt whose section is on screen and snaps back to it when clicked, the viewport stays anchored to that prompt while blocks above it keep streaming, and the footer reports how many rows arrived since auto-follow paused. The surface keeps the rest of the interactive chrome alive between the transcript and the editor — working loader, token/cost readout, todo and subagent HUDs, error banners, pending messages, and hook widgets — so a streaming turn looks the same as it does in the default renderer, and it reserves the scrollbar column at all times so crossing one screenful never reflows the transcript by a column. `/tui default` (or `/tui close`) restores the native-scrollback renderer and `/tui status` reports the active mode; the preference applies to the current session only.
+ - Fixed fullscreen transcript wheel scrolling discarding Ghostty's accelerated burst: each native SGR wheel report now retains the terminal's default three-row discrete delta instead of being reduced to one row when reports arrive within the same burst, and each report opens a display-rate render window so a fast spin paints one frame per report instead of landing as a few large jumps. Measured over a 450 ms gesture of 50 native reports: 14 paints moving a median of 11 rows each before, 49 paints moving a median of 3 rows each after — the smoothness costs ~3.5x the bytes for the duration of the gesture, bounded by the alt-screen per-line diff and the engine's adaptive backpressure.
+ - Added usage telemetry and an automatic lifecycle for auto-learn managed skills. Injecting an `omp-managed` skill into a turn (slash command, ACP, RPC, or autoload) now records a use count and timestamp in `~/.omp/agent/managed-skills/usage.json`; discovery alone never counts, and authored skills are never recorded. When `autolearn.enabled` is on, each top-level session start runs one non-blocking curation pass: a skill is only ever judged on a pass after the one that first observed it, a never-used skill inside the stale window is left alone, and otherwise `lastUsedAt ?? createdAt` older than `autolearn.curator.archiveAfterDays` (default 90) moves the skill to `managed-skills/.archive/` — out of discovery, reversible with one move — while older than `autolearn.curator.staleAfterDays` (default 30) only flags it. Using a stale skill again reactivates it. Passes that change something append one developer message naming what moved.
++- Added `session_search`, a tool for recalling past conversations from their message content. Session messages are indexed incrementally into a local SQLite FTS5 index as they are persisted, and the tool infers its mode from the arguments given: a `query` ranks matching sessions by BM25 with one hit per session plus surrounding context, a `sessionId` with `aroundEntryId` scrolls a window in either direction from that anchor, a `sessionId` alone returns the session's first and last messages, and no arguments lists recent sessions. No model call is involved on any path. Indexing covers user and assistant messages of persisted sessions from the point the feature is enabled — there is no backfill of prior sessions — and `sessionSearch.enabled` (default `true`) gates both the index and the tool.
+ 
+ ## [17.2.15] - 2026-08-12
+ 
+diff --git a/packages/coding-agent/src/config/settings-schema.ts b/packages/coding-agent/src/config/settings-schema.ts
+index 9c6ceab241..8603248906 100644
+--- a/packages/coding-agent/src/config/settings-schema.ts
++++ b/packages/coding-agent/src/config/settings-schema.ts
+@@ -4101,6 +4101,20 @@ export const SETTINGS_SCHEMA = {
+ 		},
+ 	},
+ 
++	// Gates both halves of past-conversation recall: the incremental index
++	// written by SessionManager.appendMessage and the session_search tool that
++	// reads it. Not under `tools.*` because turning it off also stops indexing.
++	"sessionSearch.enabled": {
++		type: "boolean",
++		default: true,
++		ui: {
++			tab: "tools",
++			group: "Available Tools",
++			label: "Session Message Search",
++			description: "Index message content for the session_search tool (past-conversation recall)",
++		},
++	},
++
+ 	"ask.enabled": {
+ 		type: "boolean",
+ 		default: true,
+diff --git a/packages/coding-agent/src/prompts/tools/session-search.md b/packages/coding-agent/src/prompts/tools/session-search.md
+new file mode 100644
+index 0000000000..41dfc2c814
+--- /dev/null
++++ b/packages/coding-agent/src/prompts/tools/session-search.md
+@@ -0,0 +1,12 @@
++Full-text search over the message content of your own past sessions (BM25, deterministic, no model call).
++
++Use to recover prior work: how a problem was solved before, what was decided and why, which approach already failed. Complements memory recall — this reads the actual transcript, not a summary.
++
++Mode is inferred from the arguments; there is no mode parameter.
++
++- `query` → **discovery**. Best match per session (never several hits from one conversation), each with the matching excerpt, the messages around it, and the session's first/last messages. Start here when you know the subject but not the session.
++- `sessionId` + `aroundEntryId` → **scroll**. Reads `window` messages either side of that entry. Re-issue anchored on the first or last entry of the result to keep paging in that direction. Use after discovery to read more of a session that looked right.
++- `sessionId` alone → the session's first and last messages, to judge it before scrolling.
++- no arguments → **browse**. Recent sessions, newest first. Use when you do not yet know what to search for.
++
++Indexing covers `user` and `assistant` text only, from the point the index was enabled — an older or tool-only session may be absent. Absence is not proof the work never happened.
+diff --git a/packages/coding-agent/src/session/messages.ts b/packages/coding-agent/src/session/messages.ts
+index acde7698bf..5d6851dcc4 100644
+--- a/packages/coding-agent/src/session/messages.ts
++++ b/packages/coding-agent/src/session/messages.ts
+@@ -139,7 +139,11 @@ export function didSessionMessagesChange(previousMessages: AgentMessage[], nextM
+ 	);
+ }
+ 
+-function textFromContent(content: unknown): string {
++/**
++ * Plain text of a message's content: the string itself, or the concatenated
++ * `text` blocks. Non-text blocks (images, tool calls, thinking) are dropped.
++ */
++export function textFromContent(content: unknown): string {
+ 	if (typeof content === "string") return content.trim();
+ 	if (!Array.isArray(content)) return "";
+ 	const parts: string[] = [];
+diff --git a/packages/coding-agent/src/session/session-manager.ts b/packages/coding-agent/src/session/session-manager.ts
+index 127eeae1f3..79f14600be 100644
+--- a/packages/coding-agent/src/session/session-manager.ts
++++ b/packages/coding-agent/src/session/session-manager.ts
+@@ -18,6 +18,7 @@ import {
+ 	stringifyJson,
+ 	toError,
+ } from "@oh-my-pi/pi-utils";
++import { isSettingsInitialized, settings } from "../config/settings";
+ import type { StructuredSubagentSchemaMode } from "../task/types";
+ import { ArtifactManager } from "./artifacts";
+ import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
+@@ -30,6 +31,7 @@ import {
+ 	type PythonExecutionMessage,
+ 	sanitizeRehydratedOpenAIResponsesAssistantMessage,
+ 	stripInternalDetailsFields,
++	textFromContent,
+ } from "./messages";
+ import { type BuildSessionContextOptions, buildSessionContext, type SessionContext } from "./session-context";
+ import {
+@@ -68,6 +70,7 @@ import {
+ 	writeTerminalBreadcrumb,
+ } from "./session-paths";
+ import { prepareEntryForPersistence } from "./session-persistence";
++import { SessionSearchIndex } from "./session-search-index";
+ import {
+ 	FileSessionStorage,
+ 	MemorySessionStorage,
+@@ -2056,9 +2059,51 @@ export class SessionManager {
+ 	): string {
+ 		const entry: SessionMessageEntry = { type: "message", ...this.#freshEntryFields(), message };
+ 		this.#recordEntry(entry);
++		this.#indexForSearch(message, entry.id);
+ 		return entry.id;
+ 	}
+ 
++	/**
++	 * Feed conversation text into the cross-session search index backing the
++	 * `session_search` tool.
++	 *
++	 * Runs after {@link #recordEntry} so a latched persistence failure throws
++	 * first — nothing reaches the index that never reached the JSONL. Only
++	 * `user`/`assistant` text is indexed: tool and custom payloads dominate a
++	 * transcript by volume and bury the conversation that makes a session
++	 * findable. Non-persisted managers (in-memory sessions, test doubles) have
++	 * no durable transcript to point a search hit at, so they are skipped.
++	 *
++	 * Settings arrive through the global singleton rather than a constructor
++	 * option: this class is deliberately settings-free (six static factories,
++	 * several of whose callers — `createEmptySessionFile`, session listing —
++	 * hold no `Settings`), and `isSettingsInitialized` is the established
++	 * accessor for exactly that case.
++	 */
++	#indexForSearch(
++		message:
++			| Message
++			| CustomMessage
++			| HookMessage
++			| BashExecutionMessage
++			| PythonExecutionMessage
++			| FileMentionMessage,
++		entryId: string,
++	): void {
++		if (!this.#persist || !this.#sessionId) return;
++		if (message.role !== "user" && message.role !== "assistant") return;
++		if (!isSettingsInitialized() || !settings.get("sessionSearch.enabled")) return;
++		const text = textFromContent(message.content);
++		if (!text) return;
++		try {
++			SessionSearchIndex.open().indexMessage(this.#sessionId, message.role, text, entryId);
++		} catch (error) {
++			// A search index that cannot open (read-only home, corrupt db) must
++			// never take down the append path that just persisted the turn.
++			logger.warn("Session search indexing failed", { error: String(error) });
++		}
++	}
++
+ 	/**
+ 	 * Append to a non-active branch without changing the current leaf.
+ 	 * Used by work that retains ownership of a branch across tree navigation.
+diff --git a/packages/coding-agent/src/session/session-search-index.ts b/packages/coding-agent/src/session/session-search-index.ts
+new file mode 100644
+index 0000000000..6c6d64e1f1
+--- /dev/null
++++ b/packages/coding-agent/src/session/session-search-index.ts
+@@ -0,0 +1,361 @@
++import { Database, type Statement } from "bun:sqlite";
++import * as fs from "node:fs";
++import * as path from "node:path";
++import { AsyncDrain, getDbBusyTimeoutMs, getSessionSearchDbPath, logger } from "@oh-my-pi/pi-utils";
++
++/** One indexed message of a past session. */
++export interface MessageRow {
++	/** Monotonic index-local row id; orders messages within a session. */
++	id: number;
++	sessionId: string;
++	role: string;
++	text: string;
++	/** Session-entry id the message was persisted under; the scroll anchor. */
++	entryId?: string;
++	createdAt: number;
++}
++
++/** First and last messages of a session — enough to tell what it was about. */
++export interface SessionBookends {
++	start: MessageRow[];
++	end: MessageRow[];
++}
++
++/** One session that matched a discovery query, with orientation context. */
++export interface SessionSearchHit {
++	sessionId: string;
++	/** Best-ranked matching message in this session. */
++	match: MessageRow;
++	/** FTS excerpt around the matched terms. */
++	snippet: string;
++	/** Messages surrounding {@link match}, inclusive of it, in session order. */
++	window: MessageRow[];
++	bookends: SessionBookends;
++}
++
++/** A session present in the index, for chronological browsing. */
++export interface RecentIndexedSession {
++	sessionId: string;
++	messageCount: number;
++	/** Epoch seconds of the newest indexed message. */
++	lastActivityAt: number;
++	/** First user message of the session, when it has one. */
++	preview?: string;
++}
++
++interface PendingRow {
++	sessionId: string;
++	role: string;
++	text: string;
++	entryId?: string;
++}
++
++type StoredRow = {
++	id: number;
++	session_id: string;
++	role: string;
++	text: string;
++	entry_id: string | null;
++	created_at: number;
++};
++
++type StoredRowWithSnippet = StoredRow & { snippet: string };
++
++type RecentRow = {
++	session_id: string;
++	message_count: number;
++	last_activity_at: number;
++	preview: string | null;
++};
++
++const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
++
++/**
++ * How many FTS rows to pull per requested session. Discovery keeps one hit per
++ * session, so a query whose top matches all come from one long conversation
++ * would otherwise return a single result; over-fetching gives the dedupe room
++ * to reach further down the ranking before it runs out of rows.
++ */
++const DISCOVERY_OVERSCAN = 8;
++const DISCOVERY_MAX_SCAN = 400;
++/** Messages kept on each side of a session's bookends. */
++const BOOKEND_SIZE = 3;
++
++/**
++ * Full-text index over the *content* of past session messages.
++ *
++ * Distinct from `HistoryStorage`, which indexes typed prompts (the shell-style
++ * command history) in its own database:
++ * different rows, different lifetime, different consumer. This one is written
++ * incrementally by `SessionManager.appendMessage` and read by the
++ * `session_search` tool.
++ *
++ * Only `user` and `assistant` text is stored. Tool results are excluded at the
++ * call site: they dominate a transcript by volume and bury the conversation
++ * that makes a session findable.
++ */
++export class SessionSearchIndex {
++	#db: Database;
++	static #instance?: SessionSearchIndex;
++	#drain = new AsyncDrain<PendingRow>(100);
++	/** Resolves when every queued write has landed; see {@link flush}. */
++	#pending: Promise<void> = Promise.resolve();
++
++	#insertRowStmt: Statement;
++	#searchStmt: Statement;
++	#beforeStmt: Statement;
++	#fromStmt: Statement;
++	#anchorStmt: Statement;
++	#bookendStartStmt: Statement;
++	#bookendEndStmt: Statement;
++	#recentStmt: Statement;
++
++	private constructor(dbPath: string) {
++		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
++
++		this.#db = new Database(dbPath);
++		// Install the busy handler before any lock-taking statement, as
++		// HistoryStorage does: a contended index must not stall the caller.
++		this.#db.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
++		this.#db.run(`
++PRAGMA journal_mode=WAL;
++PRAGMA synchronous=NORMAL;
++
++CREATE TABLE IF NOT EXISTS messages (
++	id INTEGER PRIMARY KEY AUTOINCREMENT,
++	session_id TEXT NOT NULL,
++	role TEXT NOT NULL,
++	text TEXT NOT NULL,
++	entry_id TEXT,
++	created_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
++);
++CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
++
++CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text, content='messages', content_rowid='id');
++
++CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
++	INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
++	END;
++	`);
++
++		this.#insertRowStmt = this.#db.prepare(
++			"INSERT INTO messages (session_id, role, text, entry_id) VALUES (?, ?, ?, ?)",
++		);
++		// `messages_fts` is not aliased: snippet()'s first argument must name the
++		// FTS table itself, and bare `rank` (BM25) is unambiguous with one FTS
++		// table in scope.
++		this.#searchStmt = this.#db.prepare(`
++SELECT m.id, m.session_id, m.role, m.text, m.entry_id, m.created_at,
++	snippet(messages_fts, 0, '', '', '…', 24) AS snippet
++FROM messages_fts
++JOIN messages m ON m.id = messages_fts.rowid
++WHERE messages_fts MATCH ?
++ORDER BY rank, m.id DESC
++LIMIT ?`);
++		// Windows page by session-local position, never by raw id arithmetic:
++		// ids are global, so concurrent sessions interleave them and an
++		// `id BETWEEN anchor - n AND anchor + n` range would silently return
++		// fewer rows the busier the machine was.
++		this.#beforeStmt = this.#db.prepare(
++			"SELECT id, session_id, role, text, entry_id, created_at FROM messages WHERE session_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
++		);
++		this.#fromStmt = this.#db.prepare(
++			"SELECT id, session_id, role, text, entry_id, created_at FROM messages WHERE session_id = ? AND id >= ? ORDER BY id ASC LIMIT ?",
++		);
++		this.#anchorStmt = this.#db.prepare("SELECT id FROM messages WHERE session_id = ? AND entry_id = ? LIMIT 1");
++		this.#bookendStartStmt = this.#db.prepare(
++			"SELECT id, session_id, role, text, entry_id, created_at FROM messages WHERE session_id = ? ORDER BY id ASC LIMIT ?",
++		);
++		this.#bookendEndStmt = this.#db.prepare(
++			"SELECT id, session_id, role, text, entry_id, created_at FROM messages WHERE session_id = ? AND id > ? ORDER BY id DESC LIMIT ?",
++		);
++		this.#recentStmt = this.#db.prepare(`
++SELECT session_id,
++	COUNT(*) AS message_count,
++	MAX(created_at) AS last_activity_at,
++	(SELECT text FROM messages inner_m
++		WHERE inner_m.session_id = m.session_id AND inner_m.role = 'user'
++		ORDER BY inner_m.id ASC LIMIT 1) AS preview
++FROM messages m
++GROUP BY session_id
++ORDER BY MAX(id) DESC
++LIMIT ?`);
++	}
++
++	static open(dbPath: string = getSessionSearchDbPath()): SessionSearchIndex {
++		if (!SessionSearchIndex.#instance) {
++			SessionSearchIndex.#instance = new SessionSearchIndex(dbPath);
++		}
++		return SessionSearchIndex.#instance;
++	}
++
++	/** @internal Reset the singleton and close its database — test-only. */
++	static resetInstance(): void {
++		const instance = SessionSearchIndex.#instance;
++		SessionSearchIndex.#instance = undefined;
++		if (instance) instance.#close();
++	}
++
++	#close(): void {
++		this.#insertRowStmt.finalize();
++		this.#searchStmt.finalize();
++		this.#beforeStmt.finalize();
++		this.#fromStmt.finalize();
++		this.#anchorStmt.finalize();
++		this.#bookendStartStmt.finalize();
++		this.#bookendEndStmt.finalize();
++		this.#recentStmt.finalize();
++		this.#db.close();
++	}
++
++	/**
++	 * Queue one message for indexing. Never blocks and never throws: the caller
++	 * is the session append path, where a search index must not be able to fail
++	 * a persisted turn.
++	 */
++	indexMessage(sessionId: string, role: string, text: string, entryId: string | undefined): void {
++		const trimmed = text.trim();
++		if (!sessionId || !trimmed) return;
++		this.#pending = this.#drain
++			.push({ sessionId, role, text: trimmed, entryId }, rows => this.#insertBatch(rows))
++			.catch(error => {
++				logger.error("SessionSearchIndex insert failed", { error: String(error) });
++			});
++	}
++
++	/** Resolves once queued {@link indexMessage} writes have landed. */
++	flush(): Promise<void> {
++		return this.#pending;
++	}
++
++	#insertBatch(rows: PendingRow[]): void {
++		this.#db.transaction((batch: PendingRow[]) => {
++			for (const row of batch) {
++				this.#insertRowStmt.run(row.sessionId, row.role, row.text, row.entryId ?? null);
++			}
++		})(rows);
++	}
++
++	/**
++	 * Sessions whose message content matches `query`, best match first, at most
++	 * one entry per session. Each hit carries the matched excerpt, the messages
++	 * around it, and the session's bookends — enough to judge relevance without
++	 * loading the transcript.
++	 */
++	searchDiscovery(query: string, limit: number, windowSize = 5): SessionSearchHit[] {
++		const safeLimit = SessionSearchIndex.#normalizeLimit(limit);
++		if (safeLimit === 0) return [];
++
++		const tokens = SessionSearchIndex.#tokenize(query);
++		if (tokens.length === 0) return [];
++		const ftsQuery = tokens.map(token => `"${token.replace(/"/g, '""')}"*`).join(" ");
++
++		let rows: StoredRowWithSnippet[];
++		try {
++			rows = this.#searchStmt.all(
++				ftsQuery,
++				Math.min(safeLimit * DISCOVERY_OVERSCAN, DISCOVERY_MAX_SCAN),
++			) as StoredRowWithSnippet[];
++		} catch (error) {
++			logger.debug("SessionSearchIndex FTS query failed", { error: String(error) });
++			return [];
++		}
++
++		const hits: SessionSearchHit[] = [];
++		const seen = new Set<string>();
++		for (const row of rows) {
++			if (seen.has(row.session_id)) continue;
++			seen.add(row.session_id);
++			const match = SessionSearchIndex.#toMessage(row);
++			hits.push({
++				sessionId: row.session_id,
++				match,
++				snippet: row.snippet || match.text,
++				window: this.#windowAround(row.session_id, row.id, windowSize),
++				bookends: this.getBookends(row.session_id),
++			});
++			if (hits.length === safeLimit) break;
++		}
++		return hits;
++	}
++
++	/**
++	 * The session's first and last {@link BOOKEND_SIZE} messages. Short sessions
++	 * yield fewer: `end` never repeats a message already in `start`.
++	 */
++	getBookends(sessionId: string): SessionBookends {
++		const start = (this.#bookendStartStmt.all(sessionId, BOOKEND_SIZE) as StoredRow[]).map(
++			SessionSearchIndex.#toMessage,
++		);
++		const lastStartId = start.at(-1)?.id ?? 0;
++		const end = (this.#bookendEndStmt.all(sessionId, lastStartId, BOOKEND_SIZE) as StoredRow[]).map(
++			SessionSearchIndex.#toMessage,
++		);
++		end.reverse();
++		return { start, end };
++	}
++
++	/**
++	 * Up to `windowSize` messages before and after the message persisted under
++	 * `anchorEntryId`, the anchor included. Re-anchoring on the first or last
++	 * returned entry pages further in that direction. Empty when the anchor is
++	 * not indexed.
++	 */
++	getScrollWindow(sessionId: string, anchorEntryId: string, windowSize: number): MessageRow[] {
++		const size = SessionSearchIndex.#normalizeLimit(windowSize);
++		const anchor = this.#anchorStmt.get(sessionId, anchorEntryId) as { id: number } | undefined;
++		if (!anchor) return [];
++		return this.#windowAround(sessionId, anchor.id, size);
++	}
++
++	/** Sessions present in the index, most recently active first. */
++	listRecentSessions(limit: number): RecentIndexedSession[] {
++		const safeLimit = SessionSearchIndex.#normalizeLimit(limit);
++		if (safeLimit === 0) return [];
++		const rows = this.#recentStmt.all(safeLimit) as RecentRow[];
++		return rows.map(row => ({
++			sessionId: row.session_id,
++			messageCount: row.message_count,
++			lastActivityAt: row.last_activity_at,
++			preview: row.preview ?? undefined,
++		}));
++	}
++
++	#windowAround(sessionId: string, anchorId: number, windowSize: number): MessageRow[] {
++		const before = (this.#beforeStmt.all(sessionId, anchorId, windowSize) as StoredRow[]).map(
++			SessionSearchIndex.#toMessage,
++		);
++		before.reverse();
++		const fromAnchor = (this.#fromStmt.all(sessionId, anchorId, windowSize + 1) as StoredRow[]).map(
++			SessionSearchIndex.#toMessage,
++		);
++		return [...before, ...fromAnchor];
++	}
++
++	static #toMessage(row: StoredRow): MessageRow {
++		return {
++			id: row.id,
++			sessionId: row.session_id,
++			role: row.role,
++			text: row.text,
++			entryId: row.entry_id ?? undefined,
++			createdAt: row.created_at,
++		};
++	}
++
++	static #normalizeLimit(limit: number): number {
++		if (!Number.isFinite(limit)) return 0;
++		return Math.min(Math.max(0, Math.floor(limit)), 1000);
++	}
++
++	/**
++	 * Split on non-alphanumeric runs, mirroring FTS5's `unicode61` tokenizer so
++	 * query tokens align with how stored text was indexed.
++	 */
++	static #tokenize(query: string): string[] {
++		return query
++			.toLowerCase()
++			.split(/[^\p{L}\p{N}]+/u)
++			.filter(token => token.length > 0);
++	}
++}
+diff --git a/packages/coding-agent/src/tools/builtin-names.ts b/packages/coding-agent/src/tools/builtin-names.ts
+index 7c323c9f5a..c8ac283e7e 100644
+--- a/packages/coding-agent/src/tools/builtin-names.ts
++++ b/packages/coding-agent/src/tools/builtin-names.ts
+@@ -28,6 +28,7 @@ export const BUILTIN_TOOL_NAMES = [
+ 	"reflect",
+ 	"learn",
+ 	"manage_skill",
++	"session_search",
+ ] as const;
+ 
+ export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[number];
+diff --git a/packages/coding-agent/src/tools/index.ts b/packages/coding-agent/src/tools/index.ts
+index 0890fe1fd3..e3889ef62c 100644
+--- a/packages/coding-agent/src/tools/index.ts
++++ b/packages/coding-agent/src/tools/index.ts
+@@ -62,6 +62,7 @@ import { wrapToolWithMetaNotice } from "./output-meta";
+ import { ReadTool } from "./read";
+ import type { PlanProposalHandler } from "./resolve";
+ import { SecurityScanTool } from "./security-scan";
++import { SessionSearchTool } from "./session-search";
+ import { supportsExternalThinking, ThinkTool } from "./think";
+ import { type TodoPhase, TodoTool } from "./todo";
+ import { WriteTool } from "./write";
+@@ -443,6 +444,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
+ 	reflect: MemoryReflectTool.createIf,
+ 	learn: LearnTool.createIf,
+ 	manage_skill: ManageSkillTool.createIf,
++	session_search: SessionSearchTool.createIf,
+ };
+ 
+ export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {
+@@ -612,6 +614,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
+ 		if (name === "inspect_image") return isInspectImageToolActive(session);
+ 		if (name === "web_search") return session.settings.get("web_search.enabled");
+ 		if (name === "security_scan") return session.settings.get("security.enabled");
++		if (name === "session_search") return session.settings.get("sessionSearch.enabled");
+ 		if (name === "think") return externalThinkingActive;
+ 		if (name === "ask") return session.settings.get("ask.enabled");
+ 		if (name === "browser") return session.settings.get("browser.enabled");
+diff --git a/packages/coding-agent/src/tools/session-search.ts b/packages/coding-agent/src/tools/session-search.ts
+new file mode 100644
+index 0000000000..27a758876a
+--- /dev/null
++++ b/packages/coding-agent/src/tools/session-search.ts
+@@ -0,0 +1,163 @@
++import { type } from "@oh-my-pi/omptype";
++import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
++import sessionSearchDescription from "../prompts/tools/session-search.md" with { type: "text" };
++import type { MessageRow, SessionBookends } from "../session/session-search-index";
++import { SessionSearchIndex } from "../session/session-search-index";
++import type { ToolSession } from ".";
++
++const sessionSearchSchema = type({
++	"query?": type("string").describe("full-text query over past session messages (discovery mode)"),
++	"sessionId?": type("string").describe("session to read, taken from a discovery or browse result"),
++	"aroundEntryId?": type("string").describe("entry id to centre the scroll window on; requires sessionId"),
++	"window?": type("number").describe("messages read either side of the scroll anchor (default 10)"),
++});
++
++export type SessionSearchParams = typeof sessionSearchSchema.infer;
++
++const DEFAULT_SCROLL_WINDOW = 10;
++const MAX_SCROLL_WINDOW = 50;
++const DISCOVERY_SESSION_LIMIT = 5;
++const BROWSE_LIMIT = 20;
++/** Per-message clip in rendered output; long turns would otherwise swamp the result. */
++const MESSAGE_CLIP = 400;
++
++function clip(text: string, max = MESSAGE_CLIP): string {
++	const collapsed = text.replace(/\s+/g, " ").trim();
++	return collapsed.length > max ? `${collapsed.slice(0, max)}…` : collapsed;
++}
++
++function renderMessage(message: MessageRow, indent: string): string {
++	const anchor = message.entryId ? ` entry ${message.entryId}` : "";
++	return `${indent}${message.role}${anchor}: ${clip(message.text)}`;
++}
++
++function renderBookends(bookends: SessionBookends, indent: string): string[] {
++	const lines: string[] = [];
++	if (bookends.start.length > 0) {
++		lines.push(`${indent}session opens:`);
++		for (const message of bookends.start) lines.push(renderMessage(message, `${indent}  `));
++	}
++	if (bookends.end.length > 0) {
++		lines.push(`${indent}session closes:`);
++		for (const message of bookends.end) lines.push(renderMessage(message, `${indent}  `));
++	}
++	return lines;
++}
++
++/**
++ * Read-only recall over the content of past sessions. Three modes inferred from
++ * the arguments — no mode parameter, so the model picks by what it knows rather
++ * than by naming a strategy.
++ */
++export class SessionSearchTool implements AgentTool<typeof sessionSearchSchema> {
++	readonly name = "session_search";
++	readonly approval = "read" as const;
++	readonly label = "Session Search";
++	readonly description = sessionSearchDescription;
++	readonly parameters = sessionSearchSchema;
++	readonly strict = true;
++	readonly loadMode = "discoverable" as const;
++	readonly summary = "Search the message content of past sessions";
++
++	static createIf(session: ToolSession): SessionSearchTool | null {
++		if (!session.settings.get("sessionSearch.enabled")) return null;
++		return new SessionSearchTool();
++	}
++
++	async execute(_id: string, params: SessionSearchParams): Promise<AgentToolResult> {
++		const index = SessionSearchIndex.open();
++		// Reads must see writes queued by the turn that just ran; the index
++		// batches inserts behind an async drain.
++		await index.flush();
++
++		if (params.query) return this.#discovery(index, params.query);
++		if (params.sessionId) return this.#scroll(index, params.sessionId, params.aroundEntryId, params.window);
++		return this.#browse(index);
++	}
++
++	#discovery(index: SessionSearchIndex, query: string): AgentToolResult {
++		const hits = index.searchDiscovery(query, DISCOVERY_SESSION_LIMIT);
++		if (hits.length === 0) {
++			return {
++				content: [{ type: "text", text: `No indexed session message matches "${query}".` }],
++				details: { mode: "discovery", query, sessions: 0 },
++			};
++		}
++
++		const lines = [`${hits.length} session${hits.length === 1 ? "" : "s"} match "${query}".`];
++		for (const hit of hits) {
++			lines.push("", `session ${hit.sessionId}`);
++			lines.push(`  match (${hit.match.role}, entry ${hit.match.entryId ?? "unknown"}): ${clip(hit.snippet)}`);
++			if (hit.window.length > 0) {
++				lines.push("  around the match:");
++				for (const message of hit.window) lines.push(renderMessage(message, "    "));
++			}
++			lines.push(...renderBookends(hit.bookends, "  "));
++		}
++		return {
++			content: [{ type: "text", text: lines.join("\n") }],
++			details: { mode: "discovery", query, sessions: hits.length },
++		};
++	}
++
++	#scroll(
++		index: SessionSearchIndex,
++		sessionId: string,
++		aroundEntryId: string | undefined,
++		window: number | undefined,
++	): AgentToolResult {
++		if (!aroundEntryId) {
++			const bookends = index.getBookends(sessionId);
++			if (bookends.start.length === 0) {
++				return {
++					content: [{ type: "text", text: `Session ${sessionId} has no indexed messages.` }],
++					details: { mode: "scroll", sessionId, messages: 0 },
++				};
++			}
++			const lines = [`Session ${sessionId} — first and last messages. Pass aroundEntryId to read the middle.`];
++			lines.push(...renderBookends(bookends, ""));
++			return {
++				content: [{ type: "text", text: lines.join("\n") }],
++				details: { mode: "scroll", sessionId, messages: bookends.start.length + bookends.end.length },
++			};
++		}
++
++		const size = Math.min(Math.max(1, Math.floor(window ?? DEFAULT_SCROLL_WINDOW)), MAX_SCROLL_WINDOW);
++		const messages = index.getScrollWindow(sessionId, aroundEntryId, size);
++		if (messages.length === 0) {
++			return {
++				content: [{ type: "text", text: `No indexed message ${aroundEntryId} in session ${sessionId}.` }],
++				details: { mode: "scroll", sessionId, aroundEntryId, messages: 0 },
++			};
++		}
++
++		const lines = [`Session ${sessionId} — ${messages.length} messages around entry ${aroundEntryId}.`];
++		for (const message of messages) lines.push(renderMessage(message, ""));
++		lines.push("", "Re-anchor on the first or last entry above to keep scrolling.");
++		return {
++			content: [{ type: "text", text: lines.join("\n") }],
++			details: { mode: "scroll", sessionId, aroundEntryId, messages: messages.length },
++		};
++	}
++
++	#browse(index: SessionSearchIndex): AgentToolResult {
++		const sessions = index.listRecentSessions(BROWSE_LIMIT);
++		if (sessions.length === 0) {
++			return {
++				content: [{ type: "text", text: "No sessions indexed yet." }],
++				details: { mode: "browse", sessions: 0 },
++			};
++		}
++
++		const lines = [`${sessions.length} indexed session${sessions.length === 1 ? "" : "s"}, newest first.`];
++		for (const session of sessions) {
++			const when = new Date(session.lastActivityAt * 1000).toISOString();
++			lines.push("", `session ${session.sessionId} · ${session.messageCount} messages · last active ${when}`);
++			if (session.preview) lines.push(`  opens: ${clip(session.preview)}`);
++		}
++		return {
++			content: [{ type: "text", text: lines.join("\n") }],
++			details: { mode: "browse", sessions: sessions.length },
++		};
++	}
++}
+diff --git a/packages/coding-agent/test/session/session-search-index.test.ts b/packages/coding-agent/test/session/session-search-index.test.ts
+new file mode 100644
+index 0000000000..b29bd14ccb
+--- /dev/null
++++ b/packages/coding-agent/test/session/session-search-index.test.ts
+@@ -0,0 +1,337 @@
++import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
++import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
++import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
++import { SessionSearchIndex } from "@oh-my-pi/pi-coding-agent/session/session-search-index";
++import { TempDir } from "@oh-my-pi/pi-utils";
++import { createAssistantMessage } from "../helpers/agent-session-setup";
++
++let tempDir: TempDir | null = null;
++
++function freshIndex(): SessionSearchIndex {
++	tempDir = TempDir.createSync("@omp-session-search-");
++	SessionSearchIndex.resetInstance();
++	return SessionSearchIndex.open(tempDir.join("session-search.db"));
++}
++
++/** Drain the 100ms insert batch window and await the pending writes. */
++async function flush(index: SessionSearchIndex): Promise<void> {
++	vi.advanceTimersByTime(100);
++	await index.flush();
++}
++
++interface Seed {
++	sessionId: string;
++	role: string;
++	text: string;
++	entryId: string;
++}
++
++async function seed(index: SessionSearchIndex, rows: Seed[]): Promise<void> {
++	for (const row of rows) index.indexMessage(row.sessionId, row.role, row.text, row.entryId);
++	await flush(index);
++}
++
++function conversation(sessionId: string, count: number, prefix = "message"): Seed[] {
++	return Array.from({ length: count }, (_, i) => ({
++		sessionId,
++		role: i % 2 === 0 ? "user" : "assistant",
++		text: `${prefix} number ${i + 1}`,
++		entryId: `${sessionId}-e${i + 1}`,
++	}));
++}
++
++beforeAll(async () => {
++	resetSettingsForTest();
++	await Settings.init({ inMemory: true, overrides: { "sessionSearch.enabled": true } });
++});
++
++afterAll(() => {
++	resetSettingsForTest();
++});
++
++beforeEach(() => {
++	SessionSearchIndex.resetInstance();
++	vi.useFakeTimers();
++});
++
++afterEach(async () => {
++	SessionSearchIndex.resetInstance();
++	vi.useRealTimers();
++	if (tempDir) {
++		await tempDir.remove().catch(() => {});
++		tempDir = null;
++	}
++});
++
++describe("SessionSearchIndex.searchDiscovery", () => {
++	it("finds the session whose message content matches, with the term in the snippet", async () => {
++		const index = freshIndex();
++		await seed(index, [
++			{ sessionId: "s-alpha", role: "user", text: "how do we wire the postgres migration", entryId: "a1" },
++			{ sessionId: "s-beta", role: "user", text: "unrelated chatter about lunch", entryId: "b1" },
++		]);
++
++		const hits = index.searchDiscovery("postgres", 5);
++
++		expect(hits.map(hit => hit.sessionId)).toEqual(["s-alpha"]);
++		expect(hits[0]?.snippet).toContain("postgres");
++		expect(hits[0]?.match.entryId).toBe("a1");
++	});
++
++	it("returns one entry per session even when several of its messages match", async () => {
++		const index = freshIndex();
++		await seed(index, [
++			{ sessionId: "s-alpha", role: "user", text: "the docker sandbox keeps dying", entryId: "a1" },
++			{ sessionId: "s-alpha", role: "assistant", text: "the docker sandbox needs cap-drop", entryId: "a2" },
++			{ sessionId: "s-alpha", role: "user", text: "docker again, third time", entryId: "a3" },
++			{ sessionId: "s-beta", role: "user", text: "docker compose in another session", entryId: "b1" },
++		]);
++
++		const hits = index.searchDiscovery("docker", 5);
++
++		expect(hits.map(hit => hit.sessionId).sort()).toEqual(["s-alpha", "s-beta"]);
++		expect(hits.filter(hit => hit.sessionId === "s-alpha")).toHaveLength(1);
++	});
++
++	it("carries the surrounding messages and the session bookends on each hit", async () => {
++		const index = freshIndex();
++		const rows = conversation("s-long", 20);
++		rows[9] = { sessionId: "s-long", role: "user", text: "the elusive kryptonite detail", entryId: "s-long-e10" };
++		await seed(index, rows);
++
++		const [hit] = index.searchDiscovery("kryptonite", 5);
++
++		expect(hit?.window.map(m => m.entryId)).toEqual([
++			"s-long-e5",
++			"s-long-e6",
++			"s-long-e7",
++			"s-long-e8",
++			"s-long-e9",
++			"s-long-e10",
++			"s-long-e11",
++			"s-long-e12",
++			"s-long-e13",
++			"s-long-e14",
++			"s-long-e15",
++		]);
++		expect(hit?.bookends.start.map(m => m.entryId)).toEqual(["s-long-e1", "s-long-e2", "s-long-e3"]);
++		expect(hit?.bookends.end.map(m => m.entryId)).toEqual(["s-long-e18", "s-long-e19", "s-long-e20"]);
++	});
++
++	it("honours the session limit", async () => {
++		const index = freshIndex();
++		await seed(
++			index,
++			["s1", "s2", "s3", "s4"].map(sessionId => ({
++				sessionId,
++				role: "user",
++				text: "shared needle term",
++				entryId: `${sessionId}-e1`,
++			})),
++		);
++
++		expect(index.searchDiscovery("needle", 2)).toHaveLength(2);
++	});
++
++	it("returns nothing for a query with no alphanumeric tokens", async () => {
++		const index = freshIndex();
++		await seed(index, [{ sessionId: "s1", role: "user", text: "anything", entryId: "e1" }]);
++
++		expect(index.searchDiscovery("???", 5)).toEqual([]);
++	});
++});
++
++describe("SessionSearchIndex.getBookends", () => {
++	it("returns the first three and last three messages of a long session", async () => {
++		const index = freshIndex();
++		await seed(index, conversation("s-long", 8));
++
++		const bookends = index.getBookends("s-long");
++
++		expect(bookends.start.map(m => m.entryId)).toEqual(["s-long-e1", "s-long-e2", "s-long-e3"]);
++		expect(bookends.end.map(m => m.entryId)).toEqual(["s-long-e6", "s-long-e7", "s-long-e8"]);
++	});
++
++	it("never repeats a message when the session is shorter than six", async () => {
++		const index = freshIndex();
++		await seed(index, conversation("s-short", 4));
++
++		const bookends = index.getBookends("s-short");
++
++		expect(bookends.start.map(m => m.entryId)).toEqual(["s-short-e1", "s-short-e2", "s-short-e3"]);
++		expect(bookends.end.map(m => m.entryId)).toEqual(["s-short-e4"]);
++	});
++
++	it("puts every message in start and leaves end empty below the bookend size", async () => {
++		const index = freshIndex();
++		await seed(index, conversation("s-tiny", 2));
++
++		const bookends = index.getBookends("s-tiny");
++
++		expect(bookends.start.map(m => m.entryId)).toEqual(["s-tiny-e1", "s-tiny-e2"]);
++		expect(bookends.end).toEqual([]);
++	});
++});
++
++describe("SessionSearchIndex.getScrollWindow", () => {
++	it("returns messages before and after a mid-session anchor", async () => {
++		const index = freshIndex();
++		await seed(index, conversation("s-long", 20));
++
++		const window = index.getScrollWindow("s-long", "s-long-e10", 3);
++
++		expect(window.map(m => m.entryId)).toEqual([
++			"s-long-e7",
++			"s-long-e8",
++			"s-long-e9",
++			"s-long-e10",
++			"s-long-e11",
++			"s-long-e12",
++			"s-long-e13",
++		]);
++	});
++
++	it("keeps scrolling forward when re-anchored on the last entry it returned", async () => {
++		const index = freshIndex();
++		await seed(index, conversation("s-long", 20));
++
++		const first = index.getScrollWindow("s-long", "s-long-e10", 3);
++		const lastEntryId = first.at(-1)?.entryId;
++		const next = index.getScrollWindow("s-long", lastEntryId ?? "", 3);
++
++		expect(next.map(m => m.entryId)).not.toEqual(first.map(m => m.entryId));
++		expect(next.at(-1)?.entryId).toBe("s-long-e16");
++		// Progress: the follow-up window reaches messages the first one never showed.
++		expect(next.filter(m => !first.some(prev => prev.entryId === m.entryId))).not.toHaveLength(0);
++	});
++
++	it("keeps scrolling backward when re-anchored on the first entry it returned", async () => {
++		const index = freshIndex();
++		await seed(index, conversation("s-long", 20));
++
++		const first = index.getScrollWindow("s-long", "s-long-e10", 3);
++		const next = index.getScrollWindow("s-long", first[0]?.entryId ?? "", 3);
++
++		expect(next[0]?.entryId).toBe("s-long-e4");
++	});
++
++	it("counts the window in session-local positions, not raw row ids", async () => {
++		const index = freshIndex();
++		// Two sessions interleaved: raw row ids of s-a are 1,3,5,… so an id-range
++		// window would silently return half as many messages.
++		const rows: Seed[] = [];
++		for (let i = 1; i <= 10; i++) {
++			rows.push({ sessionId: "s-a", role: "user", text: `a${i}`, entryId: `a-e${i}` });
++			rows.push({ sessionId: "s-b", role: "user", text: `b${i}`, entryId: `b-e${i}` });
++		}
++		await seed(index, rows);
++
++		const window = index.getScrollWindow("s-a", "a-e5", 2);
++
++		expect(window.map(m => m.entryId)).toEqual(["a-e3", "a-e4", "a-e5", "a-e6", "a-e7"]);
++		expect(window.every(m => m.sessionId === "s-a")).toBe(true);
++	});
++
++	it("returns nothing for an anchor that is not indexed", async () => {
++		const index = freshIndex();
++		await seed(index, conversation("s-long", 5));
++
++		expect(index.getScrollWindow("s-long", "no-such-entry", 3)).toEqual([]);
++	});
++});
++
++describe("SessionSearchIndex.listRecentSessions", () => {
++	it("lists indexed sessions newest first with counts and the opening prompt", async () => {
++		const index = freshIndex();
++		await seed(index, [
++			{ sessionId: "s-old", role: "user", text: "first thing we discussed", entryId: "o1" },
++			{ sessionId: "s-old", role: "assistant", text: "reply", entryId: "o2" },
++			{ sessionId: "s-new", role: "assistant", text: "resumed context", entryId: "n1" },
++			{ sessionId: "s-new", role: "user", text: "second session opener", entryId: "n2" },
++		]);
++
++		const sessions = index.listRecentSessions(10);
++
++		expect(sessions.map(s => s.sessionId)).toEqual(["s-new", "s-old"]);
++		expect(sessions[0]?.messageCount).toBe(2);
++		// Preview is the first *user* message, even when an assistant turn came first.
++		expect(sessions[0]?.preview).toBe("second session opener");
++		expect(sessions[1]?.preview).toBe("first thing we discussed");
++	});
++
++	it("is empty before anything is indexed", () => {
++		const index = freshIndex();
++		expect(index.listRecentSessions(10)).toEqual([]);
++	});
++});
++
++describe("SessionSearchIndex.indexMessage", () => {
++	it("ignores blank text so empty turns never occupy the index", async () => {
++		const index = freshIndex();
++		index.indexMessage("s1", "user", "   \n  ", "e1");
++		index.indexMessage("s1", "user", "real content", "e2");
++		await flush(index);
++
++		expect(index.listRecentSessions(10)[0]?.messageCount).toBe(1);
++	});
++});
++
++describe("SessionManager message indexing", () => {
++	it("indexes user and assistant turns but never tool results", async () => {
++		const index = freshIndex();
++		const root = tempDir?.path() ?? "";
++		const manager = SessionManager.create(root, `${root}/sessions`);
++
++		manager.appendMessage({ role: "user", content: "the kryptonite refactor question", timestamp: Date.now() });
++		manager.appendMessage(createAssistantMessage("the kryptonite refactor answer"));
++		manager.appendMessage({
++			role: "toolResult",
++			toolCallId: "t1",
++			toolName: "bash",
++			isError: false,
++			content: [{ type: "text", text: "the kryptonite refactor tool output" }],
++			timestamp: Date.now(),
++		});
++		await flush(index);
++
++		const hits = index.searchDiscovery("kryptonite", 5);
++		expect(hits.map(hit => hit.sessionId)).toEqual([manager.getSessionId()]);
++		const bookends = index.getBookends(manager.getSessionId());
++		expect(bookends.start.map(message => message.role)).toEqual(["user", "assistant"]);
++		expect(bookends.start.map(message => message.text)).toEqual([
++			"the kryptonite refactor question",
++			"the kryptonite refactor answer",
++		]);
++	});
++
++	it("makes the appended entry id a usable scroll anchor", async () => {
++		const index = freshIndex();
++		const root = tempDir?.path() ?? "";
++		const manager = SessionManager.create(root, `${root}/sessions`);
++
++		manager.appendMessage({ role: "user", content: "anchor me", timestamp: Date.now() });
++		const entryId = manager.appendMessage(createAssistantMessage("anchored reply"));
++		manager.appendMessage({ role: "user", content: "after the anchor", timestamp: Date.now() });
++		await flush(index);
++
++		const window = index.getScrollWindow(manager.getSessionId(), entryId, 1);
++		expect(window.map(message => message.text)).toEqual(["anchor me", "anchored reply", "after the anchor"]);
++	});
++
++	it("skips indexing when the setting is off", async () => {
++		const index = freshIndex();
++		const root = tempDir?.path() ?? "";
++		const manager = SessionManager.create(root, `${root}/sessions`);
++
++		resetSettingsForTest();
++		await Settings.init({ inMemory: true, overrides: { "sessionSearch.enabled": false } });
++		try {
++			manager.appendMessage({ role: "user", content: "should not be indexed", timestamp: Date.now() });
++			await flush(index);
++			expect(index.listRecentSessions(10)).toEqual([]);
++		} finally {
++			resetSettingsForTest();
++			await Settings.init({ inMemory: true, overrides: { "sessionSearch.enabled": true } });
++		}
++	});
++});
+diff --git a/packages/coding-agent/test/tools/session-search.test.ts b/packages/coding-agent/test/tools/session-search.test.ts
+new file mode 100644
+index 0000000000..5a8610080f
+--- /dev/null
++++ b/packages/coding-agent/test/tools/session-search.test.ts
+@@ -0,0 +1,175 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
++import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
++import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
++import { SessionSearchIndex } from "@oh-my-pi/pi-coding-agent/session/session-search-index";
++import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
++import { SessionSearchTool } from "@oh-my-pi/pi-coding-agent/tools/session-search";
++import { TempDir } from "@oh-my-pi/pi-utils";
++
++let tempDir: TempDir | null = null;
++
++function makeSession(enabled = true): ToolSession {
++	return { settings: Settings.isolated({ "sessionSearch.enabled": enabled }) } as unknown as ToolSession;
++}
++
++function freshIndex(): SessionSearchIndex {
++	tempDir = TempDir.createSync("@omp-session-search-tool-");
++	SessionSearchIndex.resetInstance();
++	return SessionSearchIndex.open(tempDir.join("session-search.db"));
++}
++
++function resultText(result: AgentToolResult): string {
++	return result.content
++		.filter((part): part is { type: "text"; text: string } => part.type === "text")
++		.map(part => part.text)
++		.join("\n");
++}
++
++function details(result: AgentToolResult): Record<string, unknown> {
++	return (result.details ?? {}) as Record<string, unknown>;
++}
++
++/**
++ * Two sessions of eight messages each; only `s-docker` talks about docker, and
++ * it does so twice so discovery has something to deduplicate.
++ */
++async function seedTwoSessions(index: SessionSearchIndex): Promise<void> {
++	for (let i = 1; i <= 8; i++) {
++		const dockerText =
++			i === 4 ? "the docker sandbox needs cap-drop" : i === 6 ? "docker again later on" : `docker session line ${i}`;
++		index.indexMessage("s-docker", i % 2 === 0 ? "assistant" : "user", dockerText, `d-e${i}`);
++	}
++	for (let i = 1; i <= 8; i++) {
++		index.indexMessage("s-other", i % 2 === 0 ? "assistant" : "user", `unrelated line ${i}`, `o-e${i}`);
++	}
++	vi.advanceTimersByTime(100);
++	await index.flush();
++}
++
++beforeEach(() => {
++	SessionSearchIndex.resetInstance();
++	vi.useFakeTimers();
++});
++
++afterEach(async () => {
++	SessionSearchIndex.resetInstance();
++	vi.useRealTimers();
++	if (tempDir) {
++		await tempDir.remove().catch(() => {});
++		tempDir = null;
++	}
++});
++
++describe("SessionSearchTool.createIf", () => {
++	it("builds the tool when session search is enabled", () => {
++		expect(SessionSearchTool.createIf(makeSession(true))).toBeInstanceOf(SessionSearchTool);
++	});
++
++	it("returns null when session search is disabled", () => {
++		expect(SessionSearchTool.createIf(makeSession(false))).toBeNull();
++	});
++});
++
++describe("SessionSearchTool mode inference", () => {
++	it("takes the discovery path when only a query is given", async () => {
++		const index = freshIndex();
++		await seedTwoSessions(index);
++		const tool = new SessionSearchTool();
++
++		const result = await tool.execute("call-1", { query: "docker" });
++		const text = resultText(result);
++
++		expect(details(result).mode).toBe("discovery");
++		expect(text).toContain("s-docker");
++		expect(text).not.toContain("s-other");
++		// One entry per session, with the match plus orientation context.
++		expect(details(result).sessions).toBe(1);
++		expect(text).toContain("around the match:");
++		expect(text).toContain("session opens:");
++		expect(text).toContain("session closes:");
++	});
++
++	it("takes the scroll path when a session and an anchor entry are given", async () => {
++		const index = freshIndex();
++		await seedTwoSessions(index);
++		const tool = new SessionSearchTool();
++
++		const result = await tool.execute("call-2", { sessionId: "s-docker", aroundEntryId: "d-e4", window: 2 });
++		const text = resultText(result);
++
++		expect(details(result).mode).toBe("scroll");
++		expect(details(result).messages).toBe(5);
++		for (const entryId of ["d-e2", "d-e3", "d-e4", "d-e5", "d-e6"]) expect(text).toContain(entryId);
++		expect(text).not.toContain("d-e1");
++		expect(text).not.toContain("d-e7");
++		// The rendered entry ids are what the model re-anchors on.
++		expect(text).toContain("Re-anchor");
++	});
++
++	it("takes the browse path when no argument is given", async () => {
++		const index = freshIndex();
++		await seedTwoSessions(index);
++		const tool = new SessionSearchTool();
++
++		const result = await tool.execute("call-3", {});
++		const text = resultText(result);
++
++		expect(details(result).mode).toBe("browse");
++		expect(details(result).sessions).toBe(2);
++		// Newest-active session first: s-other was indexed last.
++		expect(text.indexOf("s-other")).toBeLessThan(text.indexOf("s-docker"));
++		expect(text).toContain("8 messages");
++	});
++
++	it("shows the session bookends when a session is given without an anchor", async () => {
++		const index = freshIndex();
++		await seedTwoSessions(index);
++		const tool = new SessionSearchTool();
++
++		const result = await tool.execute("call-4", { sessionId: "s-docker" });
++		const text = resultText(result);
++
++		expect(details(result).mode).toBe("scroll");
++		expect(text).toContain("session opens:");
++		expect(text).toContain("session closes:");
++		expect(text).toContain("d-e1");
++		expect(text).toContain("d-e8");
++		// The middle of the session is withheld until the model scrolls to it.
++		expect(text).not.toContain("d-e5");
++	});
++});
++
++describe("SessionSearchTool empty results", () => {
++	it("reports no match rather than erroring on an unmatched query", async () => {
++		const index = freshIndex();
++		await seedTwoSessions(index);
++		const tool = new SessionSearchTool();
++
++		const result = await tool.execute("call-5", { query: "kubernetes" });
++
++		expect(result.isError).toBeUndefined();
++		expect(details(result).sessions).toBe(0);
++		expect(resultText(result)).toContain("No indexed session message matches");
++	});
++
++	it("reports an unknown scroll anchor instead of returning a silent empty window", async () => {
++		const index = freshIndex();
++		await seedTwoSessions(index);
++		const tool = new SessionSearchTool();
++
++		const result = await tool.execute("call-6", { sessionId: "s-docker", aroundEntryId: "nope" });
++
++		expect(details(result).messages).toBe(0);
++		expect(resultText(result)).toContain("nope");
++	});
++
++	it("says nothing is indexed when the index is empty", async () => {
++		freshIndex();
++		const tool = new SessionSearchTool();
++
++		const result = await tool.execute("call-7", {});
++
++		expect(details(result).mode).toBe("browse");
++		expect(resultText(result)).toContain("No sessions indexed yet.");
++	});
++});
+diff --git a/packages/utils/src/dirs.ts b/packages/utils/src/dirs.ts
+index c33b1471a0..09951f1394 100644
+--- a/packages/utils/src/dirs.ts
++++ b/packages/utils/src/dirs.ts
+@@ -758,6 +758,11 @@ export function getHistoryDbPath(agentDir?: string): string {
+ 	return dirs.agentSubdir(agentDir, "history.db", "data");
+ }
+ 
++/** Get the path to session-search.db (SQLite FTS index over past session message content). */
++export function getSessionSearchDbPath(agentDir?: string): string {
++	return dirs.agentSubdir(agentDir, "session-search.db", "data");
++}
++
+ /** Get the path to models.db (model cache database). */
+ export function getModelDbPath(agentDir?: string): string {
+ 	return dirs.agentSubdir(agentDir, "models.db", "data");
+-- 
+2.55.0
+

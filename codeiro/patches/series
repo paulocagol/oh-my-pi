@@ -18,3 +18,6 @@
 0017-fix-restringir-grep-de-cat-logo-a-Markdown.patch
 0018-feat-reconhecer-install-codeiro-omp-e-rebuildar-quan.patch
 0019-fix-manter-omp-update-como-comando-do-fork.patch
+0020-feat-adicionar-tui-fullscreen-com-scroll-suave-por-r.patch
+0021-feat-adicionar-telemetria-de-uso-e-curator-de-ciclo-.patch
+0022-feat-adicionar-session_search-busca-full-text-em-men.patch
