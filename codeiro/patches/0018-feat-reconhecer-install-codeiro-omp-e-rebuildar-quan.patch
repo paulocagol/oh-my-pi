@@ -1,7 +1,7 @@
 From c2379d3bdba06bbfc4a2db7e5b2beeb46162ffa5 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 15:20:41 -0300
-Subject: [PATCH 18/22] feat: reconhecer install codeiro-omp e rebuildar quando
+Subject: [PATCH 18/23] feat: reconhecer install codeiro-omp e rebuildar quando
  a serie muda
 
 ---
