@@ -1,7 +1,7 @@
 From ea9a263af0fdb2dc475b1b5217772ea6db86815f Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 21:33:06 -0300
-Subject: [PATCH 20/23] feat: adicionar /tui fullscreen com scroll suave por
+Subject: [PATCH 20/24] feat: adicionar /tui fullscreen com scroll suave por
  report SGR
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

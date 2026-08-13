@@ -1,7 +1,7 @@
 From a6c6efdc68d4b1db8dd5ec1044bf63a5aa1f268b Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Tue, 11 Aug 2026 17:27:32 -0300
-Subject: [PATCH 04/23] fix: bloquear traversal no addon nativo
+Subject: [PATCH 04/24] fix: bloquear traversal no addon nativo
 
 ---
  .../src/cli/codeiro-source-update.ts          | 37 ++++++++++++++++++-
