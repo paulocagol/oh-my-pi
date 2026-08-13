@@ -1,7 +1,7 @@
 From e43cae7df06188fb80c1b21b80416d352f0b1537 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 12:37:57 -0300
-Subject: [PATCH 17/23] =?UTF-8?q?fix:=20restringir=20grep=20de=20cat=C3=A1?=
+Subject: [PATCH 17/24] =?UTF-8?q?fix:=20restringir=20grep=20de=20cat=C3=A1?=
  =?UTF-8?q?logo=20a=20Markdown?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
