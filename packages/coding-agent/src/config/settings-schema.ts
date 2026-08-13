@@ -2675,6 +2675,10 @@ export const SETTINGS_SCHEMA = {
 	},
 	// Config-file-only knob (numbers without `options` are hidden from the UI).
 	"autolearn.minToolCalls": { type: "number", default: 5 },
+	// Skill-lifecycle curator clocks, also config-file-only. Defaults mirror the
+	// prior art these were ported from (stale 30d, archive 90d).
+	"autolearn.curator.staleAfterDays": { type: "number", default: 30 },
+	"autolearn.curator.archiveAfterDays": { type: "number", default: 90 },
 
 	// Mnemopi local SQLite memory backend.
 	"mnemopi.dbPath": {

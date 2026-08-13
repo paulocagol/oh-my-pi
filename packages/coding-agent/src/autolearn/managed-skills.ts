@@ -253,3 +253,45 @@ export async function deleteManagedSkill(name: string): Promise<void> {
 		}
 	});
 }
+
+/**
+ * Directory holding retired managed skills. Dot-prefixed on purpose: skill
+ * discovery skips dot-entries (`discovery/helpers.ts`), so a rename in here is
+ * all it takes to remove a skill from every future system prompt — no extra
+ * filtering, and no code path that can accidentally load an archived body.
+ */
+const ARCHIVE_DIR_NAME = ".archive";
+
+/**
+ * Retire a managed skill by moving it under `managed-skills/.archive/<name>/`.
+ *
+ * The curator retires skills it cannot prove are still useful, so the operation
+ * is a move rather than a delete: a wrong call costs the user one `mv` to undo,
+ * not a lost skill. Same symlink guards as {@link deleteManagedSkill} — renaming
+ * a symlinked directory would move the link, and a later restore would resurrect
+ * a pointer outside the managed root.
+ */
+export async function archiveManagedSkill(name: string): Promise<void> {
+	const safe = sanitizeSkillName(name);
+	await serializeSkillMutation(safe, async () => {
+		await assertManagedRootSafe();
+		const root = getManagedSkillsDir();
+		const dir = path.join(root, safe);
+		const dirStat = await fs.lstat(dir).catch(err => {
+			if (isEnoent(err)) return null;
+			throw err;
+		});
+		if (dirStat === null) {
+			throw new Error(`Managed skill "${safe}" does not exist.`);
+		}
+		if (dirStat.isSymbolicLink()) {
+			throw new Error(`Managed skill "${safe}" is a symlink; refusing to archive outside the managed directory.`);
+		}
+		const dest = path.join(root, ARCHIVE_DIR_NAME, safe);
+		await fs.mkdir(path.join(root, ARCHIVE_DIR_NAME), { recursive: true });
+		// The archived copy is history, not authority: a name retired twice keeps
+		// the latest body, and `rename` would fail on a non-empty destination.
+		await fs.rm(dest, { recursive: true, force: true });
+		await fs.rename(dir, dest);
+	});
+}

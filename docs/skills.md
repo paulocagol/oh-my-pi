@@ -97,6 +97,18 @@ Current registered skill providers:
 
 Dedup key is skill name. First item with a given name wins.
 
+#### Managed-skill lifecycle
+
+Managed skills carry usage telemetry in `~/.omp/agent/managed-skills/usage.json`: `buildSkillPromptMessage()` bumps a counter and `lastUsedAt` whenever an `omp-managed` skill is actually injected into a turn (slash command, ACP, RPC, or autoload). Discovery alone never counts as use, and authored skills are never recorded.
+
+When `autolearn.enabled` is on, every top-level session start runs one non-blocking curation pass (`src/autolearn/curator.ts`) over that telemetry:
+
+- a skill seen for the first time only gets its clock seeded — it is never judged on the pass that discovered it
+- a never-used skill younger than `autolearn.curator.staleAfterDays` is left alone (absence of use is not yet evidence of obsolescence)
+- otherwise the anchor is `lastUsedAt ?? createdAt`: older than `autolearn.curator.archiveAfterDays` archives, older than `autolearn.curator.staleAfterDays` marks stale, fresher than that reactivates a stale skill
+
+Archiving moves `managed-skills/<name>/` to `managed-skills/.archive/<name>/`. Discovery skips dot-prefixed directories, so the skill disappears from the system prompt; restoring it is a move back out. Authored skills are unreachable from the curator — it only walks the managed root. When a pass archives or marks anything, the session gets one developer message naming what changed.
+
 ### Source toggles and filtering
 
 `loadSkills()` applies these controls:

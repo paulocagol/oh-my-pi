@@ -39,6 +39,7 @@ import {
 } from "./advisor";
 import { AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
+import { applySkillCuratorTransitions, renderSkillCuratorReport } from "./autolearn/curator";
 import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
@@ -3828,6 +3829,31 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					settings,
 					capture: content => session.runAutolearnCapture(signal => runAutoLearnCapture(content, signal)),
 				});
+				// Managed skills accumulate forever otherwise, and each one costs
+				// `name` + `description` in every system prompt of every later
+				// session. Fire-and-forget: startup must never wait on a disk sweep,
+				// and a curation failure must never block a session.
+				const curatorOptions = {
+					staleAfterDays: settings.get("autolearn.curator.staleAfterDays"),
+					archiveAfterDays: settings.get("autolearn.curator.archiveAfterDays"),
+				};
+				void applySkillCuratorTransitions(curatorOptions)
+					.then(report => {
+						if (report.archived.length === 0 && report.markedStale === 0) return;
+						const message: Message = {
+							role: "developer",
+							content: [{ type: "text", text: renderSkillCuratorReport(report, curatorOptions) }],
+							attribution: "agent",
+							timestamp: Date.now(),
+						};
+						session.agent.appendMessage(message);
+						session.sessionManager.appendMessage(message);
+					})
+					.catch(error => {
+						logger.warn("Skill curator pass failed", {
+							error: error instanceof Error ? error.message : String(error),
+						});
+					});
 			} else {
 				void logger.time("startMemoryStartupTask", startMemoryBackend);
 			}

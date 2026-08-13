@@ -10,6 +10,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
 
 // Guards the auto-learn tool ACTIVATION wiring in createAgentSession: createTools
 // force-includes manage_skill into the built registry for an enabled top-level
@@ -24,9 +25,17 @@ describe("createAgentSession auto-learn tool activation", () => {
 	let modelRegistry: ModelRegistry;
 	const sessions: AgentSession[] = [];
 
+	let originalAgentDir: string;
+
 	beforeAll(async () => {
 		registryDir = path.join(os.tmpdir(), `pi-autolearn-active-${Snowflake.next()}`);
 		fs.mkdirSync(registryDir, { recursive: true });
+		// Managed-skill discovery and the auto-learn curator resolve the managed
+		// root from the process-global agent dir, not from `createAgentSession`'s
+		// `agentDir` option. Without this, the auto-learn sessions below would
+		// read — and curate — the developer's real ~/.omp/agent/managed-skills.
+		originalAgentDir = getAgentDir();
+		setAgentDir(registryDir);
 		authStorage = await AuthStorage.create(path.join(registryDir, "auth.db"));
 		modelRegistry = new ModelRegistry(authStorage);
 	});
@@ -34,6 +43,7 @@ describe("createAgentSession auto-learn tool activation", () => {
 	afterAll(async () => {
 		for (const session of sessions) await session.dispose().catch(() => {});
 		authStorage.close();
+		setAgentDir(originalAgentDir);
 		if (fs.existsSync(registryDir)) removeSyncWithRetries(registryDir);
 	});
 
