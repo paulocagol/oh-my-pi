@@ -4,8 +4,8 @@ Receita operacional para quando `omp update` não consegue se atualizar
 sozinho, ou quando o upstream publica uma tag nova e a série precisa ser
 recalculada em cima dela. Não depende de nada específico de uma máquina: só
 do checkout deste repositório, `git`, `bun` ≥1.3.14 (`packages/coding-agent/package.json:87`)
-e, se `packages/natives` mudar, um toolchain Rust para o `build` do addon
-nativo (`packages/natives/README.md:46`).
+e nada além disso: o addon nativo vem do pacote publicado da tag (seção 5), então
+só é preciso um toolchain Rust se o fork passar a alterar `packages/natives`.
 
 Dentro do agente, o executor desta receita é o comando `/omp-update`: ele faz o
 diagnóstico, tenta o caminho curto, rebaseia a série resolvendo cada conflito,
@@ -156,25 +156,38 @@ Nenhum dos três é opcional; todos são checáveis localmente antes do push.
    (`bun test` roda o runner nativo do Bun sobre o arquivo, como o próprio
    `test/codeiro-source-update.test.ts:1` importa de `bun:test`; `check` é
    `biome check . && bun run check:types`, `packages/coding-agent/package.json:35-36`.)
-   Se o rebase tocou outro pacote do workspace, rode o mesmo par
-   (`bun test <pacote>/test/...` + `bun run check` dentro do pacote) para
-   cada um — nunca a suíte inteira do repositório só para validar um rebase.
+   Se o rebase tocou outro pacote do workspace, rode a suíte inteira: um teste do
+   fork que vazava `chdir` derrubou 40 testes alheios que passavam isolados, e só
+   a suíte completa mostra isso.
 
-3. **Rebuild do addon nativo, se `packages/natives` mudou.** O `.node`
-   carregado em runtime expõe um símbolo de versão gerado a partir de
-   `packages/natives/package.json` (`version`) — `packages/natives/native/loader-state.js`
-   monta esse símbolo e, se o `.node` em disco não o expuser, o loader lança
-   `Failed to load pi_natives native addon for ...` em vez de rodar com um
-   binário de outra versão. Uma tag upstream nova quase sempre bate a versão
-   do `package.json`; rebuilde antes de publicar:
+3. **Addon nativo da tag nova, sempre.** O `.node` em
+   `packages/natives/native/pi_natives.<plataforma>.node` **não é versionado**
+   (`git ls-files packages/natives/native` só lista `.js`/`.d.ts`): o rebase o
+   deixa na versão da tag anterior e o `build` o embute. O loader
+   (`packages/natives/native/loader-state.js`) exige o símbolo
+   `__piNativesV<versão>` derivado de `packages/natives/package.json`, então o
+   binário morre com `Failed to load pi_natives native addon for ...`. Pior: o
+   binário extrai o addon embutido por cima do cache compartilhado
+   `~/.omp/natives/<versão>/`, quebrando também o `omp` upstream instalado — e
+   "limpar o cache e rodar de novo" o reenvenena.
+
+   Diagnóstico e correção, sem toolchain Rust — o fork não altera código nativo,
+   então o addon publicado da tag é o correto (é o mesmo que
+   `installPublishedNativeAddon` busca no source-build):
    ```sh
-   bun run build:native
+   strings -a packages/natives/native/pi_natives.darwin-arm64.node \
+     | grep -o '__piNativesV[0-9_]*' | sort -u            # versão embutida hoje
+   grep -o '"version": "[^"]*"' packages/natives/package.json | head -1
+
+   bun install --frozen-lockfile                          # traz o pacote da tag
+   cp ~/.cache/.bun/install/cache/@oh-my-pi/pi-natives-<plataforma>@<versão>@@@1/pi_natives.<plataforma>.node \
+      packages/natives/native/
    ```
-   (alias de `bun --cwd=packages/natives run build`, `package.json:96`; a raiz
-   e `packages/natives/README.md:46-47` documentam o mesmo comando.) Sem esse
-   rebuild, o binário compilado na etapa de source-build do updater carrega um
-   `.node` cujo símbolo de versão não bate com o `package.json` novo, e a
-   sessão morre no load em vez de no build.
+   `bun run build:native` (alias de `bun --cwd=packages/natives run build`) só é
+   necessário quando o fork passar a alterar `packages/natives` de verdade.
+   Depois de rodar o binário novo, confirme que o cache compartilhado voltou a
+   ser genuíno: `strings -a ~/.omp/natives/<versão>/pi_natives.<plataforma>.node
+   | grep -o '__piNativesV[0-9_]*'`.
 
 ## 6. Publicação
 
