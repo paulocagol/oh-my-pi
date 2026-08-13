@@ -266,6 +266,7 @@ export interface InteractiveModeContext {
 	 * leak.
 	 */
 	resetTranscript(): void;
+	setPrimaryTranscriptFullscreen(mode: string): void;
 	showStatus(message: string, options?: { dim?: boolean }): void;
 	showModelCycleTrack(track: string): void;
 	showError(message: string): void;

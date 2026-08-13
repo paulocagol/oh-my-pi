@@ -36,9 +36,15 @@ export class UserMessageComponent extends Container {
 	// never mutates the container's cached array.
 	#zoneSource: readonly string[] | undefined;
 	#zoneLines: string[] | undefined;
+	/** Raw prompt text, read by the fullscreen surface for its sticky prompt header. */
+	readonly text: string;
+	/** True for developer/agent-attributed inputs, which are not user prompts. */
+	readonly synthetic: boolean;
 
 	constructor(text: string, synthetic = false, imageLinks?: readonly (string | undefined)[]) {
 		super();
+		this.text = text;
+		this.synthetic = synthetic;
 		const bgColor = (value: string) => theme.bg("userMessageBg", value);
 		// Paint the magic keywords ("ultrathink"/"orchestrate"/"workflowz") inside the rendered
 		// bubble too — matching the live editor glow. The Markdown component routes code spans and

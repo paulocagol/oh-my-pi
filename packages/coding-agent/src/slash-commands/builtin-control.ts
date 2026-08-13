@@ -5,6 +5,20 @@ import type { SlashCommandSpec } from "./types";
 
 export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
+		name: "tui",
+		description: "Switch the terminal UI renderer",
+		allowArgs: true,
+		subcommands: [
+			{ name: "fullscreen", description: "Open the live transcript in fullscreen mode" },
+			{ name: "default", description: "Return to the normal terminal renderer" },
+			{ name: "status", description: "Show the active terminal renderer" },
+		],
+		handleTui: (command, runtime) => {
+			runtime.ctx.editor.setText("");
+			runtime.ctx.setPrimaryTranscriptFullscreen(command.args);
+		},
+	},
+	{
 		name: "force",
 		description: "Force next turn to use a specific tool",
 		aliases: ["force:"],
