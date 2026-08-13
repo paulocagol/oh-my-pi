@@ -14,8 +14,10 @@
  *   1. stages a pristine checkout of that exact stable tag in a directory
  *      outside the install prefix,
  *   2. checks out the patch repository at the pinned ref and applies the
- *      series fail-closed - a missing, empty or non-applying series aborts the
- *      update instead of silently producing an unpatched binary,
+ *      series, healing mechanical drift through a three-way merge against the
+ *      series' own base tag and failing closed on anything else - a missing,
+ *      empty or genuinely conflicting series aborts the update with a report
+ *      instead of silently producing an unpatched or mismerged binary,
  *   3. installs frozen dependencies and compiles the host binary with the
  *      repository's own release build,
  *   4. validates the built artifact's `--version`, then swaps it in through
@@ -387,13 +389,43 @@ export function parsePatchSeries(content: string): string[] {
 }
 
 /**
- * Resolve series entries to absolute patch files inside the patch checkout.
+ * Read the `# base: <tag>` header a series carries.
+ *
+ * That header is what makes a three-way fallback possible at all: the
+ * pre-image blobs the patches name in their `index` lines live in that tag,
+ * and nothing else in this flow knows which tag it is. Anything that is not a
+ * plain ref name is treated as absent - a bogus header must not become a git
+ * argument, and no base is ever inferred from somewhere else.
+ */
+export function parsePatchSeriesBase(content: string): string | undefined {
+	for (const line of content.split(/\r?\n/)) {
+		const match = /^#\s*base:\s*(\S+)$/.exec(line.trim());
+		if (!match) continue;
+		const base = match[1];
+		return /^[\w.\-/]+$/.test(base) && !base.includes("..") ? base : undefined;
+	}
+	return undefined;
+}
+
+/** A series file: the upstream tag it was generated against, plus its patches. */
+export interface PatchSeries {
+	/** Tag from the `# base: <tag>` header; absent when the series states none. */
+	readonly base?: string;
+	/** Absolute patch files, in application order. */
+	readonly files: readonly string[];
+}
+
+/**
+ * Read a series file and resolve its entries to absolute patch files inside
+ * the patch checkout.
  *
  * Fail-closed on every degenerate case - no series file, no entries, an entry
  * pointing outside the checkout, a missing patch - because each of them would
- * otherwise end with an official, unpatched binary installed as the fork.
+ * otherwise end with an official, unpatched binary installed as the fork. A
+ * missing base header is not degenerate: it only costs the three-way
+ * fallback.
  */
-export async function resolvePatchSeriesFiles(patchRepoDir: string, seriesPath: string): Promise<string[]> {
+export async function resolvePatchSeries(patchRepoDir: string, seriesPath: string): Promise<PatchSeries> {
 	const seriesFile = path.resolve(patchRepoDir, seriesPath);
 	if (!isInside(patchRepoDir, seriesFile)) {
 		throw new Error(`Patch series ${seriesPath} escapes the patch repository`);
@@ -423,7 +455,7 @@ export async function resolvePatchSeriesFiles(patchRepoDir: string, seriesPath: 
 		}
 		files.push(file);
 	}
-	return files;
+	return { base: parsePatchSeriesBase(content), files };
 }
 
 interface CommandResult {
@@ -673,23 +705,212 @@ async function syncRefCheckout(dir: string, url: string, ref: string): Promise<v
 }
 
 /**
- * Apply the series in order, aborting on the first refusal.
+ * Bring the series' base tag objects into the staging repository.
  *
- * `git apply` is used rather than a three-way or fuzzy merge: when the series
- * no longer matches the stable tag the right outcome is a failed update with
- * the old binary still in place, not a silently mismerged build.
+ * The staging checkout is a depth-1 fetch of the *new* tag, so the pre-image
+ * blobs the patches name in their `index` lines are absent and
+ * `git apply --3way` refuses with `repository lacks the necessary blob to
+ * perform 3-way merge` before falling back to a direct apply. Measured against
+ * v17.3.0: without this fetch nothing heals; with it the whole CHANGELOG drift
+ * of the series absorbs itself. Depth 1 is enough - only the blobs of that one
+ * tree are ever read - and the objects are anchored under `refs/codeiro/` so a
+ * later run finds them already there.
+ *
+ * Best-effort by design: a base tag that was deleted upstream, or a network
+ * that is down for this one extra fetch, must not fail an update that a direct
+ * apply can still complete. Exported so a test can prove the refspec against a
+ * real repository - the whole fallback is worthless if it is wrong.
  */
-async function applyPatchSeries(sourceDir: string, patches: readonly string[]): Promise<void> {
-	for (const [index, patch] of patches.entries()) {
-		console.log(chalk.dim(`Applying patch ${index + 1}/${patches.length}: ${path.basename(patch)}`));
-		const result = await runQuiet(["git", "apply", "--index", "--whitespace=nowarn", "--", patch], sourceDir);
-		if (result.exitCode !== 0) {
-			throw new Error(
-				`Patch ${path.basename(patch)} does not apply to this release; refresh the series against it.\n${result.stderr.trim()}`,
-			);
-		}
-	}
+export async function ensureBaseObjects(sourceDir: string, url: string, base: string): Promise<boolean> {
+	const result = await runQuiet(
+		["git", "fetch", "--no-tags", "--force", "--depth", "1", url, `refs/tags/${base}:refs/codeiro/series-base`],
+		sourceDir,
+	);
+	return result.exitCode === 0;
 }
+
+/** A patch of the series that did not apply, with what a decision needs. */
+export interface PatchConflict {
+	/** Basename of the patch file, e.g. `0009-feat-....patch`. */
+	readonly patch: string;
+	/** Position in the series, 1-based, and the total. */
+	readonly index: number;
+	readonly total: number;
+	/** Paths the patch touches, in the order the diff names them. */
+	readonly files: readonly string[];
+	/** Every touched path is documentation (`CHANGELOG.md` or any `*.md`). */
+	readonly docOnly: boolean;
+	/** The three-way apply was attempted. */
+	readonly threeWay: boolean;
+	/** Raw git output, for whoever wants to read the hunk. */
+	readonly detail: string;
+}
+
+/** Outcome of applying the whole series. */
+export interface SeriesApplyReport {
+	readonly applied: number;
+	readonly total: number;
+	/** Patches that only applied through a three-way merge - drift absorbed. */
+	readonly healed: readonly string[];
+	/** Empty when the whole series applied. */
+	readonly conflict?: PatchConflict;
+}
+
+/**
+ * Post-image path of a `diff --git` header, quoted or not.
+ *
+ * Even a deletion names the real path on both sides, so the `b/` side is
+ * always the file the patch is about.
+ */
+const DIFF_GIT_HEADER = /^diff --git "?a\/.+?"? "?b\/(.+?)"?$/;
+
+/**
+ * Paths a patch touches, read from the patch file itself.
+ *
+ * Parsing the file rather than asking git keeps this available in the only
+ * case that needs it: the patch did not apply, so no tree reflects it.
+ */
+export function parsePatchFiles(content: string): string[] {
+	const files: string[] = [];
+	for (const line of content.split("\n")) {
+		const match = DIFF_GIT_HEADER.exec(line);
+		if (match) files.push(match[1]);
+	}
+	return files;
+}
+
+/**
+ * Apply the series in order, healing mechanical drift and stopping at the
+ * first real conflict.
+ *
+ * A patch that no longer applies directly gets a second chance through
+ * `git apply --3way`, which is only useful once the base tag objects are
+ * present; `options.threeWay` is the caller's answer to whether they are. The
+ * fallback absorbs drift - a series hunk landing at a different offset, a
+ * CHANGELOG the new tag already rewrote - and never a semantic conflict, which
+ * still needs a decision.
+ *
+ * A conflict is returned, not thrown: the caller owns both the report and the
+ * fail-closed abort, so the installed binary stays untouched. The refused
+ * patch may leave conflict markers in the staging tree, deliberately - that is
+ * what an agent following the rebase recipe reads - and the next run's
+ * `resetCheckout` discards them.
+ */
+export async function applyPatchSeries(
+	sourceDir: string,
+	patches: readonly string[],
+	options: { readonly threeWay: boolean },
+): Promise<SeriesApplyReport> {
+	const total = patches.length;
+	const healed: string[] = [];
+	for (const [index, patch] of patches.entries()) {
+		const name = path.basename(patch);
+		console.log(chalk.dim(`Applying patch ${index + 1}/${total}: ${name}`));
+		const direct = await runQuiet(["git", "apply", "--index", "--whitespace=nowarn", "--", patch], sourceDir);
+		if (direct.exitCode === 0) continue;
+
+		const merged = options.threeWay
+			? await runQuiet(["git", "apply", "--index", "--3way", "--whitespace=nowarn", "--", patch], sourceDir)
+			: undefined;
+		if (merged?.exitCode === 0) {
+			healed.push(name);
+			// Deliberately sober: in a version bump this is the common outcome
+			// for the series' documentation hunks, not an anomaly.
+			console.log(chalk.dim("  applied by three-way merge; mechanical drift absorbed"));
+			continue;
+		}
+
+		const failure = merged ?? direct;
+		const files = parsePatchFiles(await fs.promises.readFile(patch, "utf8").catch(() => ""));
+		return {
+			applied: index,
+			total,
+			healed,
+			conflict: {
+				patch: name,
+				index: index + 1,
+				total,
+				files,
+				// An unreadable patch yields no paths, and no paths is not
+				// documentation: claiming `docOnly` there would understate a
+				// conflict nobody has seen.
+				docOnly: files.length > 0 && files.every(file => file.toLowerCase().endsWith(".md")),
+				threeWay: options.threeWay,
+				detail: failure.stderr.trim() || failure.stdout.trim(),
+			},
+		};
+	}
+	return { applied: total, total, healed };
+}
+
+/** Recipe an agent follows to rebase the series onto a new upstream tag. */
+export const REBASE_RECIPE_PATH = "codeiro/docs/rebase-da-serie.md";
+
+/** What a conflict report needs beyond the conflict itself. */
+export interface SeriesConflictContext {
+	/** Patches that applied before the conflict. */
+	readonly applied: number;
+	/** How many of those needed the three-way fallback. */
+	readonly healed: number;
+	/** Upstream tag the series was applied to. */
+	readonly upstreamTag: string;
+	/** Base tag from the series header, when it has one. */
+	readonly base?: string;
+	/** Staging tree holding the refused patch. */
+	readonly sourceDir: string;
+}
+
+/**
+ * Compose the report whoever picks this up acts on.
+ *
+ * Plain text on purpose: this is the handoff to a human or an agent, so it
+ * says which patch, which files, whether the drift is only documentation,
+ * whether the three-way fallback already had its turn, and where the refused
+ * tree is - then closes with a verdict that does not invite a retry, because
+ * re-running cannot resolve a conflict.
+ */
+export function formatSeriesConflictReport(conflict: PatchConflict, context: SeriesConflictContext): string {
+	let threeWay: string;
+	if (conflict.threeWay) {
+		threeWay = `attempted against base ${context.base} and still conflicts`;
+	} else if (context.base) {
+		threeWay = `not possible - base tag ${context.base} could not be fetched, so only a direct apply was tried`;
+	} else {
+		threeWay = "not attempted - the series has no `# base: <tag>` header, so the pre-image blobs are unknown";
+	}
+	const reason = conflict.docOnly
+		? `${conflict.patch} rewrites only documentation, but its hunks no longer match ${context.upstreamTag}; they have to be regenerated against that tag.`
+		: `${conflict.patch} conflicts with ${context.upstreamTag} in code; the hunks need a human or agent decision before the fork can build on this tag.`;
+	const lines = [
+		`${theme.status.error} Patch ${conflict.index}/${conflict.total} does not apply: ${conflict.patch}`,
+		`  Files (${conflict.files.length}):`,
+		...(conflict.files.length > 0 ? conflict.files.map(file => `    ${file}`) : ["    <unreadable patch>"]),
+		`  Scope: ${conflict.docOnly ? "documentation only - mechanical text drift" : "code, not only documentation"}`,
+		`  Three-way: ${threeWay}`,
+		`  Progress: ${context.applied}/${conflict.total} patches applied, ${context.healed} healed by three-way`,
+		`  Staging tree: ${context.sourceDir}`,
+	];
+	if (conflict.detail) {
+		lines.push("  git:", ...conflict.detail.split("\n").map(line => `    ${line}`));
+	}
+	lines.push(
+		"",
+		`${theme.status.error} Update not applied`,
+		`  Reason: ${reason}`,
+		`  Recipe: ${REBASE_RECIPE_PATH}`,
+		"  Re-running the update cannot change this; the series has to be rebased first.",
+	);
+	return lines.join("\n");
+}
+
+/**
+ * Abort whose verdict has already been printed in full.
+ *
+ * `update-cli` exits non-zero without adding its generic failure line, so the
+ * report stays the last thing on screen instead of being buried under a
+ * duplicate of its own one-line reason.
+ */
+export class CodeiroUpdateAborted extends Error {}
 
 /**
  * Rebuild the host binary from the staged, patched source tree.
@@ -981,14 +1202,41 @@ export async function runCodeiroSourceUpdate(options: {
 
 	await fs.promises.mkdir(staging.root, { recursive: true });
 
+	const upstreamUrl = `https://github.com/${manifest.upstreamRepo}.git`;
 	console.log(chalk.dim(`Staging ${manifest.upstreamRepo}@${release.tag} in ${staging.sourceDir}`));
-	await syncTagCheckout(staging.sourceDir, `https://github.com/${manifest.upstreamRepo}.git`, release.tag);
+	await syncTagCheckout(staging.sourceDir, upstreamUrl, release.tag);
 
 	console.log(chalk.dim(`Fetching patches from ${manifest.patchRepo}@${manifest.patchRef}`));
 	await syncRefCheckout(staging.patchDir, manifest.patchRepo, manifest.patchRef);
 
-	const patches = await resolvePatchSeriesFiles(staging.patchDir, manifest.patchSeries);
-	await applyPatchSeries(staging.sourceDir, patches);
+	const series = await resolvePatchSeries(staging.patchDir, manifest.patchSeries);
+	let threeWay = false;
+	if (series.base) {
+		console.log(chalk.dim(`Fetching base ${series.base} for the three-way fallback…`));
+		threeWay = await ensureBaseObjects(staging.sourceDir, upstreamUrl, series.base);
+		if (!threeWay) {
+			console.log(
+				chalk.yellow(`${theme.status.warning} Base ${series.base} unavailable; only a direct apply will be tried`),
+			);
+		}
+	}
+
+	const report = await applyPatchSeries(staging.sourceDir, series.files, { threeWay });
+	const { conflict } = report;
+	if (conflict) {
+		console.error(
+			formatSeriesConflictReport(conflict, {
+				applied: report.applied,
+				healed: report.healed.length,
+				upstreamTag: release.tag,
+				base: series.base,
+				sourceDir: staging.sourceDir,
+			}),
+		);
+		throw new CodeiroUpdateAborted(
+			`Patch ${conflict.index}/${conflict.total} (${conflict.patch}) does not apply to ${release.tag}`,
+		);
+	}
 
 	const artifactPath = await buildFromSource(staging.sourceDir, target, release.version);
 
@@ -1010,4 +1258,9 @@ export async function runCodeiroSourceUpdate(options: {
 
 	console.log(chalk.green(`\n${theme.status.success} Updated to ${release.version} (source build)`));
 	console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
+	console.log(
+		chalk.green(
+			`${theme.status.success} Update applied: ${release.version} (${release.tag} + ${manifest.patchRef}@${patchCommit.slice(0, 12)}, ${report.applied}/${report.total} patches${report.healed.length > 0 ? `, ${report.healed.length} healed by three-way` : ""})`,
+		),
+	);
 }

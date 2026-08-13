@@ -17,6 +17,7 @@ import { theme } from "../modes/theme/theme";
 import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
 import {
 	CODEIRO_DISTRIBUTION,
+	CodeiroUpdateAborted,
 	loadCodeiroInstall,
 	resolveManifestCandidates,
 	runCodeiroSourceUpdate,
@@ -1340,7 +1341,9 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
 				deps: { isMuslLinux, verifyBinaryAtPath, replaceBinaryForUpdate, sweepStaleBackups },
 			});
 		} catch (err) {
-			console.error(chalk.red(`Update failed: ${err}`));
+			// An aborted series already printed its verdict block in full;
+			// repeating the reason here would bury it.
+			if (!(err instanceof CodeiroUpdateAborted)) console.error(chalk.red(`Update failed: ${err}`));
 			process.exit(1);
 		}
 		return;
