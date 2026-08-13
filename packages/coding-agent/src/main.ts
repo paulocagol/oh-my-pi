@@ -24,6 +24,7 @@ import {
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "./capability";
 import { type Args, reportUnrecognizedFlags, validateToolNames } from "./cli/args";
+import { buildUpstreamReleaseNotice, describeCodeiroInstall } from "./cli/codeiro-source-update";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
@@ -522,13 +523,22 @@ async function runInteractiveMode(
 	// transcript above the fresh one.
 	await mode.renderInitialMessages({ preserveExistingChat: true, clearTerminalHistory: true });
 	// A resolved version check must not insert its banner into a partial transcript.
-	checkedVersionPromise.then(newVersion => {
+	checkedVersionPromise.then(async newVersion => {
 		if (!settings.get("startup.checkUpdate")) {
 			return;
 		}
-		if (newVersion) {
-			mode.showNewVersionNotification(newVersion);
+		if (!newVersion) {
+			return;
 		}
+		// The registry comparison above is distribution-blind. On a fork
+		// install the actionable fact is not "run the updater" but "the
+		// series is not on this tag yet", and both files that say so are
+		// local - so this stays off the network.
+		const identity = await describeCodeiroInstall(process.execPath).catch(() => undefined);
+		mode.showNewVersionNotification(
+			newVersion,
+			identity ? buildUpstreamReleaseNotice(newVersion, identity) : undefined,
+		);
 	});
 
 	for (const notify of notifs) {

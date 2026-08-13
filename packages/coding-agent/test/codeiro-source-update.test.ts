@@ -3,10 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	buildUpstreamReleaseNotice,
 	CODEIRO_LOCK_FILENAME,
 	CODEIRO_MANIFEST_FILENAME,
 	type CodeiroInstall,
 	type CodeiroUpdateDeps,
+	describeCodeiroInstall,
 	ensureNativeAddonDirectoryChain,
 	loadCodeiroInstall,
 	parseCodeiroManifest,
@@ -608,5 +610,88 @@ describe("runCodeiroSourceUpdate --check", () => {
 
 		expect(logs.some(line => line.includes("Forcing rebuild of 17.2.13"))).toBe(true);
 		await expect(fs.stat(staging)).rejects.toThrow();
+	});
+});
+
+describe("startup notice on a fork install", () => {
+	async function stageInstall(options: { name?: string; lock?: unknown; manifest?: unknown }): Promise<string> {
+		const dir = await makeTempDir();
+		const binaryPath = path.join(dir, options.name ?? "codeiro-omp");
+		await fs.writeFile(binaryPath, "#!/bin/sh\n");
+		if (options.manifest !== null) {
+			await fs.writeFile(
+				path.join(dir, CODEIRO_MANIFEST_FILENAME),
+				JSON.stringify(options.manifest ?? { ...VALID_MANIFEST, patchRef: "codeiro-omp-v17.2.15-c8" }),
+			);
+		}
+		if (options.lock !== undefined) {
+			await fs.writeFile(path.join(dir, CODEIRO_LOCK_FILENAME), JSON.stringify(options.lock));
+		}
+		return binaryPath;
+	}
+
+	it("reads the series ref and the tag the artifact was built from", async () => {
+		const binaryPath = await stageInstall({
+			lock: {
+				version: "17.2.15",
+				upstreamTag: "v17.2.15",
+				patchRef: "codeiro-omp-v17.2.15-c8",
+				patchCommit: "2222222222222222222222222222222222222222",
+				builtAt: "2026-08-13T00:00:00.000Z",
+			},
+		});
+
+		expect(await describeCodeiroInstall(binaryPath)).toEqual({
+			patchRef: "codeiro-omp-v17.2.15-c8",
+			upstreamTag: "v17.2.15",
+		});
+	});
+
+	it("still identifies the install when the lock is absent or corrupt", async () => {
+		const noLock = await stageInstall({});
+		expect(await describeCodeiroInstall(noLock)).toEqual({
+			patchRef: "codeiro-omp-v17.2.15-c8",
+			upstreamTag: undefined,
+		});
+
+		const badLock = await stageInstall({ lock: { version: "17.2.15" } });
+		expect((await describeCodeiroInstall(badLock))?.upstreamTag).toBeUndefined();
+	});
+
+	it("leaves an upstream install to the upstream text", async () => {
+		// No manifest at all, and a manifest next to a foreign executable name:
+		// neither may adopt the fork notice.
+		expect(await describeCodeiroInstall(await stageInstall({ manifest: null }))).toBeUndefined();
+		expect(await describeCodeiroInstall(await stageInstall({ name: "other-tool" }))).toBeUndefined();
+		expect(await describeCodeiroInstall(undefined)).toBeUndefined();
+	});
+
+	it("does not fail the notice over a manifest that does not parse", async () => {
+		const broken = await stageInstall({ manifest: { distribution: "someone-else" } });
+
+		expect(await describeCodeiroInstall(broken)).toBeUndefined();
+	});
+
+	it("names the series instead of suggesting a command that cannot work yet", () => {
+		const notice = buildUpstreamReleaseNotice("17.3.0", {
+			patchRef: "codeiro-omp-v17.2.15-c8",
+			upstreamTag: "v17.2.15",
+		});
+
+		expect(notice.command).toBeUndefined();
+		expect(notice.title).not.toContain("Update Available");
+		expect(notice.body).toContain("17.3.0");
+		expect(notice.body).toContain("codeiro-omp-v17.2.15-c8");
+		expect(notice.body).toContain("(v17.2.15)");
+		expect(notice.body).not.toContain("omp update");
+		// The distribution name must not read as part of the series name.
+		expect(notice.body).not.toContain("codeiro-omp codeiro-omp");
+	});
+
+	it("omits the built-from tag when no lock recorded it", () => {
+		const notice = buildUpstreamReleaseNotice("17.3.0", { patchRef: "codeiro" });
+
+		expect(notice.body).toContain("series codeiro;");
+		expect(notice.body).not.toContain("(");
 	});
 });
