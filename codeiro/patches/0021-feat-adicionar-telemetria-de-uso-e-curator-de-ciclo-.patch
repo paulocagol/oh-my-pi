@@ -1,0 +1,994 @@
+From a2c28604e3c5c61a2c72f5219b82c5efdf1e1f53 Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Thu, 13 Aug 2026 08:44:00 -0300
+Subject: [PATCH 21/22] feat: adicionar telemetria de uso e curator de ciclo de
+ vida para skills do autolearn
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+O autolearn cria skills mas nada nunca as aposentava, e cada managed skill
+custa name+description em TODO system prompt de TODA sessão futura. Medido:
+35 skills em 3 dias (15/dia), 8k bytes de imposto permanente por turno.
+
+Telemetria (skill-usage.ts): injetar uma skill omp-managed num turno grava
+useCount/lastUsedAt em managed-skills/usage.json. Descoberta sozinha não
+conta, e skill autoral nunca é registrada. Mutação serializada por fila com
+write atômico (tmp+rename): bumps concorrentes não perdem incremento.
+
+Curator (curator.ts): um passe por relógio no início de sessão top-level,
+fire-and-forget, gated por autolearn.enabled. Skill sem uso há mais que
+archiveAfterDays (90) é movida para managed-skills/.archive/ — fora da
+descoberta, reversível com um move, nunca delete. Passando de
+staleAfterDays (30) só marca. Usar de novo reativa. Piso de graça: uma
+skill só é julgada num passe posterior ao que a viu pela primeira vez, então
+nada é arquivado no primeiro contato. Passe que muda algo emite uma mensagem
+developer nomeando o que mudou.
+
+Escopo é seguro por construção: só caminha getManagedSkillsDir(), então
+SKILL.md autoral é inalcançável daqui. Symlink é recusado, nunca seguido.
+
+Higiene: sdk-autolearn-active-tools.test.ts não sandboxava o agent dir
+process-global, então o passe rodava contra o ~/.omp real.
+
+Inspirado no agent/curator.py do hermes-agent (Nous Research); auditoria
+completa em .claude/analyses/2026-08-13-hermes-vs-codeiro-omp.md.
+---
+ docs/settings.md                              |   2 +
+ docs/skills.md                                |  12 ++
+ packages/coding-agent/CHANGELOG.md            |   1 +
+ .../coding-agent/src/autolearn/curator.ts     | 170 ++++++++++++++++++
+ .../src/autolearn/managed-skills.ts           |  42 +++++
+ .../coding-agent/src/autolearn/skill-usage.ts | 170 ++++++++++++++++++
+ .../src/config/settings-schema.ts             |   4 +
+ .../coding-agent/src/extensibility/skills.ts  |  18 +-
+ .../system/autolearn-curator-report.md        |  10 ++
+ packages/coding-agent/src/sdk.ts              |  26 +++
+ .../test/autolearn/curator.test.ts            | 170 ++++++++++++++++++
+ .../test/autolearn/skill-usage.test.ts        | 147 +++++++++++++++
+ .../test/sdk-autolearn-active-tools.test.ts   |  10 ++
+ 13 files changed, 780 insertions(+), 2 deletions(-)
+ create mode 100644 packages/coding-agent/src/autolearn/curator.ts
+ create mode 100644 packages/coding-agent/src/autolearn/skill-usage.ts
+ create mode 100644 packages/coding-agent/src/prompts/system/autolearn-curator-report.md
+ create mode 100644 packages/coding-agent/test/autolearn/curator.test.ts
+ create mode 100644 packages/coding-agent/test/autolearn/skill-usage.test.ts
+
+diff --git a/docs/settings.md b/docs/settings.md
+index 4f17913117..3040822f4e 100644
+--- a/docs/settings.md
++++ b/docs/settings.md
+@@ -635,6 +635,8 @@ memory:
+ | `autolearn.enabled`           | boolean | `false`       | Experimental: after the agent stops, nudge it to capture lessons to memory and create/enhance isolated managed skills under `~/.omp/agent/managed-skills`. Enables the `manage_skill` tool (and `learn` when a memory backend is active). |
+ | `autolearn.autoContinue`      | boolean | `false`       | When `autolearn.enabled`, auto-run one capture turn at stop (uses extra tokens). Off = a passive reminder rides your next turn.                                                                                                           |
+ | `autolearn.minToolCalls`      | number  | `5`           | Only nudge after a turn that used at least this many tools.                                                                                                                                                                               |
++| `autolearn.curator.staleAfterDays`   | number  | `30`          | Days without a recorded use before a managed skill is flagged stale. Telemetry lives in `~/.omp/agent/managed-skills/usage.json`.                                                                                                          |
++| `autolearn.curator.archiveAfterDays` | number  | `90`          | Days without a recorded use before a managed skill is moved to `~/.omp/agent/managed-skills/.archive/` and dropped from discovery. Reversible: move the directory back out.                                                                |
+ 
+ `compaction` has additional tuning keys (idle compaction, supersede/drop heuristics) visible in `omp config list`. See [Compaction](./compaction.md) for the full strategy reference.
+ 
+diff --git a/docs/skills.md b/docs/skills.md
+index d066bdd58f..d7fe2a1343 100644
+--- a/docs/skills.md
++++ b/docs/skills.md
+@@ -97,6 +97,18 @@ Current registered skill providers:
+ 
+ Dedup key is skill name. First item with a given name wins.
+ 
++#### Managed-skill lifecycle
++
++Managed skills carry usage telemetry in `~/.omp/agent/managed-skills/usage.json`: `buildSkillPromptMessage()` bumps a counter and `lastUsedAt` whenever an `omp-managed` skill is actually injected into a turn (slash command, ACP, RPC, or autoload). Discovery alone never counts as use, and authored skills are never recorded.
++
++When `autolearn.enabled` is on, every top-level session start runs one non-blocking curation pass (`src/autolearn/curator.ts`) over that telemetry:
++
++- a skill seen for the first time only gets its clock seeded — it is never judged on the pass that discovered it
++- a never-used skill younger than `autolearn.curator.staleAfterDays` is left alone (absence of use is not yet evidence of obsolescence)
++- otherwise the anchor is `lastUsedAt ?? createdAt`: older than `autolearn.curator.archiveAfterDays` archives, older than `autolearn.curator.staleAfterDays` marks stale, fresher than that reactivates a stale skill
++
++Archiving moves `managed-skills/<name>/` to `managed-skills/.archive/<name>/`. Discovery skips dot-prefixed directories, so the skill disappears from the system prompt; restoring it is a move back out. Authored skills are unreachable from the curator — it only walks the managed root. When a pass archives or marks anything, the session gets one developer message naming what changed.
++
+ ### Source toggles and filtering
+ 
+ `loadSkills()` applies these controls:
+diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
+index 3dd4b287cc..bf5a4201fa 100644
+--- a/packages/coding-agent/CHANGELOG.md
++++ b/packages/coding-agent/CHANGELOG.md
+@@ -5,6 +5,7 @@
+ - Routed the `omp grep` subcommand through the agent's grep tool whenever its path is an internal URL, so `omp grep <pattern> vitrine.se://` searches the catalog instead of failing against a nonexistent `<cwd>/vitrine.se:` path; virtual schemes such as `omp://` resolve too. Filesystem searches keep the native code path and output, while flags the tool cannot honor — `--glob`, `--files`, `--count`, and out-of-range `--limit`/`--context` — fail with an explicit error instead of returning a silently narrowed result.
+ - Added `/tui fullscreen`, a Claude Code-style alternate-screen surface for the live primary transcript: the editor and a hint/status footer stay pinned at the bottom while the transcript scrolls above them with `PgUp`/`PgDn`, `Shift+PgUp`/`Shift+PgDn` (jump prompt to prompt), `Ctrl+Home`/`Ctrl+End`, and the mouse wheel. A sticky header names the user prompt whose section is on screen and snaps back to it when clicked, the viewport stays anchored to that prompt while blocks above it keep streaming, and the footer reports how many rows arrived since auto-follow paused. The surface keeps the rest of the interactive chrome alive between the transcript and the editor — working loader, token/cost readout, todo and subagent HUDs, error banners, pending messages, and hook widgets — so a streaming turn looks the same as it does in the default renderer, and it reserves the scrollbar column at all times so crossing one screenful never reflows the transcript by a column. `/tui default` (or `/tui close`) restores the native-scrollback renderer and `/tui status` reports the active mode; the preference applies to the current session only.
+ - Fixed fullscreen transcript wheel scrolling discarding Ghostty's accelerated burst: each native SGR wheel report now retains the terminal's default three-row discrete delta instead of being reduced to one row when reports arrive within the same burst, and each report opens a display-rate render window so a fast spin paints one frame per report instead of landing as a few large jumps. Measured over a 450 ms gesture of 50 native reports: 14 paints moving a median of 11 rows each before, 49 paints moving a median of 3 rows each after — the smoothness costs ~3.5x the bytes for the duration of the gesture, bounded by the alt-screen per-line diff and the engine's adaptive backpressure.
++- Added usage telemetry and an automatic lifecycle for auto-learn managed skills. Injecting an `omp-managed` skill into a turn (slash command, ACP, RPC, or autoload) now records a use count and timestamp in `~/.omp/agent/managed-skills/usage.json`; discovery alone never counts, and authored skills are never recorded. When `autolearn.enabled` is on, each top-level session start runs one non-blocking curation pass: a skill is only ever judged on a pass after the one that first observed it, a never-used skill inside the stale window is left alone, and otherwise `lastUsedAt ?? createdAt` older than `autolearn.curator.archiveAfterDays` (default 90) moves the skill to `managed-skills/.archive/` — out of discovery, reversible with one move — while older than `autolearn.curator.staleAfterDays` (default 30) only flags it. Using a stale skill again reactivates it. Passes that change something append one developer message naming what moved.
+ 
+ ## [17.2.15] - 2026-08-12
+ 
+diff --git a/packages/coding-agent/src/autolearn/curator.ts b/packages/coding-agent/src/autolearn/curator.ts
+new file mode 100644
+index 0000000000..fd17d55107
+--- /dev/null
++++ b/packages/coding-agent/src/autolearn/curator.ts
+@@ -0,0 +1,170 @@
++/**
++ * Lifecycle curator for managed (auto-learn) skills.
++ *
++ * Auto-learn mints skills but nothing ever retired them, and every managed
++ * skill costs `name` + `description` in EVERY system prompt of EVERY future
++ * session. This pass is the other end of that pipe: a clock-driven state
++ * machine over `skill-usage.ts` telemetry that marks unused skills stale and
++ * eventually moves them out of discovery.
++ *
++ * Scope is authored-skill-safe by construction: it only walks
++ * `getManagedSkillsDir()`, so a user's own `SKILL.md` files are unreachable
++ * from here. Retirement is a directory move, not a delete.
++ */
++import * as fs from "node:fs/promises";
++import * as path from "node:path";
++import { isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
++import curatorReportTemplate from "../prompts/system/autolearn-curator-report.md" with { type: "text" };
++import { archiveManagedSkill, getManagedSkillsDir } from "./managed-skills";
++import { readAllSkillUsage, updateSkillUsage } from "./skill-usage";
++
++const DAY_MS = 86_400_000;
++
++export interface SkillCuratorOptions {
++	/** Days without a recorded use before a skill is flagged stale. */
++	staleAfterDays: number;
++	/** Days without a recorded use before a skill is moved out of discovery. */
++	archiveAfterDays: number;
++}
++
++export interface CuratorReport {
++	/** Managed skills evaluated in this pass. */
++	checked: number;
++	markedStale: number;
++	/** Names moved under `managed-skills/.archive/`, in pass order. */
++	archived: string[];
++	reactivated: number;
++}
++
++/**
++ * Names of managed skills currently visible to discovery: a real directory
++ * (never a symlink — the curator must not move anything whose target lives
++ * outside the managed root) holding a `SKILL.md`, not dot-prefixed.
++ */
++async function listActiveManagedSkills(root: string): Promise<string[]> {
++	const entries = await fs.readdir(root, { withFileTypes: true }).catch(err => {
++		if (isEnoent(err)) return [];
++		throw err;
++	});
++	const names: string[] = [];
++	await Promise.all(
++		entries.map(async entry => {
++			if (entry.name.startsWith(".") || !entry.isDirectory()) return;
++			if (await Bun.file(path.join(root, entry.name, "SKILL.md")).exists()) names.push(entry.name);
++		}),
++	);
++	// readdir order plus concurrent stats is nondeterministic; the report names
++	// skills to the model, so sort for a stable message.
++	names.sort();
++	return names;
++}
++
++/**
++ * Run one clock-driven curation pass over the managed skills.
++ *
++ * Precedence, per skill:
++ *  1. No usage record yet → seed the clock and skip. Without this, enabling the
++ *     feature would archive every pre-existing skill on the first pass, since
++ *     there is no history from before the store existed.
++ *  2. Never used (`useCount === 0`) and younger than `staleAfterDays` → grace
++ *     floor. Absence of use is not yet evidence of obsolescence; the trigger may
++ *     simply not have come up. This also stops a `archiveAfterDays <
++ *     staleAfterDays` misconfiguration from retiring brand-new skills.
++ *  3. Anchor (`lastUsedAt ?? createdAt`) older than `archiveAfterDays` → archive.
++ *  4. Anchor older than `staleAfterDays` → mark stale (file stays in place).
++ *  5. Anchor fresher than `staleAfterDays` while flagged stale → reactivate.
++ *
++ * No dry-run mode: every action is reversible (archive is a move) and the whole
++ * feature is opt-in behind `autolearn.enabled`.
++ */
++export async function applySkillCuratorTransitions(options: SkillCuratorOptions): Promise<CuratorReport> {
++	const report: CuratorReport = { checked: 0, markedStale: 0, archived: [], reactivated: 0 };
++	const names = await listActiveManagedSkills(getManagedSkillsDir());
++	if (names.length === 0) return report;
++	report.checked = names.length;
++
++	const store = await readAllSkillUsage();
++	const now = Date.now();
++	const staleCutoff = now - options.staleAfterDays * DAY_MS;
++	const archiveCutoff = now - options.archiveAfterDays * DAY_MS;
++	const nowIso = new Date(now).toISOString();
++
++	const seeded: string[] = [];
++	const toArchive: string[] = [];
++	const toStale: string[] = [];
++	const toReactivate: string[] = [];
++
++	for (const name of names) {
++		const record = store[name];
++		// Missing or unparseable clock — reseed instead of guessing an anchor.
++		const anchor = record ? Date.parse(record.lastUsedAt ?? record.createdAt) : Number.NaN;
++		if (!record || Number.isNaN(anchor)) {
++			seeded.push(name);
++			continue;
++		}
++		const stale = record.state === "stale";
++		if (record.useCount === 0 && anchor > staleCutoff) {
++			if (stale) toReactivate.push(name);
++			continue;
++		}
++		if (anchor <= archiveCutoff) {
++			toArchive.push(name);
++			continue;
++		}
++		if (anchor <= staleCutoff) {
++			if (!stale) toStale.push(name);
++			continue;
++		}
++		if (stale) toReactivate.push(name);
++	}
++
++	// Move first, then record: a failed rename must leave the telemetry intact so
++	// the next pass retries instead of forgetting the skill exists.
++	for (const name of toArchive) {
++		try {
++			await archiveManagedSkill(name);
++			report.archived.push(name);
++		} catch (err) {
++			logger.warn("Skill curator could not archive a managed skill", {
++				name,
++				error: err instanceof Error ? err.message : String(err),
++			});
++		}
++	}
++
++	report.markedStale = toStale.length;
++	report.reactivated = toReactivate.length;
++	if (seeded.length + toStale.length + toReactivate.length + report.archived.length === 0) return report;
++	// One read-modify-write for the whole pass. The callback re-reads under the
++	// mutation lock, so a `bumpSkillUse` that landed mid-pass keeps its counters;
++	// at worst it gets a stale flag it did not earn, which the next pass undoes.
++	await updateSkillUsage(current => {
++		for (const name of seeded) current[name] = { useCount: 0, createdAt: nowIso };
++		for (const name of toStale) {
++			const record = current[name];
++			if (record) record.state = "stale";
++		}
++		for (const name of toReactivate) {
++			const record = current[name];
++			if (record) record.state = undefined;
++		}
++		// The directory left the active set; keeping its counters would re-archive
++		// it the instant a user restores the folder by hand.
++		for (const name of report.archived) delete current[name];
++		return true;
++	});
++	return report;
++}
++
++/** Session-visible summary of a pass that actually changed something. */
++export function renderSkillCuratorReport(report: CuratorReport, options: SkillCuratorOptions): string {
++	return prompt
++		.render(curatorReportTemplate, {
++			archived: report.archived,
++			archivedCount: report.archived.length,
++			markedStale: report.markedStale,
++			staleAfterDays: options.staleAfterDays,
++			archiveAfterDays: options.archiveAfterDays,
++		})
++		.trim();
++}
+diff --git a/packages/coding-agent/src/autolearn/managed-skills.ts b/packages/coding-agent/src/autolearn/managed-skills.ts
+index fa190a3bea..d274b9c53b 100644
+--- a/packages/coding-agent/src/autolearn/managed-skills.ts
++++ b/packages/coding-agent/src/autolearn/managed-skills.ts
+@@ -253,3 +253,45 @@ export async function deleteManagedSkill(name: string): Promise<void> {
+ 		}
+ 	});
+ }
++
++/**
++ * Directory holding retired managed skills. Dot-prefixed on purpose: skill
++ * discovery skips dot-entries (`discovery/helpers.ts`), so a rename in here is
++ * all it takes to remove a skill from every future system prompt — no extra
++ * filtering, and no code path that can accidentally load an archived body.
++ */
++const ARCHIVE_DIR_NAME = ".archive";
++
++/**
++ * Retire a managed skill by moving it under `managed-skills/.archive/<name>/`.
++ *
++ * The curator retires skills it cannot prove are still useful, so the operation
++ * is a move rather than a delete: a wrong call costs the user one `mv` to undo,
++ * not a lost skill. Same symlink guards as {@link deleteManagedSkill} — renaming
++ * a symlinked directory would move the link, and a later restore would resurrect
++ * a pointer outside the managed root.
++ */
++export async function archiveManagedSkill(name: string): Promise<void> {
++	const safe = sanitizeSkillName(name);
++	await serializeSkillMutation(safe, async () => {
++		await assertManagedRootSafe();
++		const root = getManagedSkillsDir();
++		const dir = path.join(root, safe);
++		const dirStat = await fs.lstat(dir).catch(err => {
++			if (isEnoent(err)) return null;
++			throw err;
++		});
++		if (dirStat === null) {
++			throw new Error(`Managed skill "${safe}" does not exist.`);
++		}
++		if (dirStat.isSymbolicLink()) {
++			throw new Error(`Managed skill "${safe}" is a symlink; refusing to archive outside the managed directory.`);
++		}
++		const dest = path.join(root, ARCHIVE_DIR_NAME, safe);
++		await fs.mkdir(path.join(root, ARCHIVE_DIR_NAME), { recursive: true });
++		// The archived copy is history, not authority: a name retired twice keeps
++		// the latest body, and `rename` would fail on a non-empty destination.
++		await fs.rm(dest, { recursive: true, force: true });
++		await fs.rename(dir, dest);
++	});
++}
+diff --git a/packages/coding-agent/src/autolearn/skill-usage.ts b/packages/coding-agent/src/autolearn/skill-usage.ts
+new file mode 100644
+index 0000000000..2fd16c1809
+--- /dev/null
++++ b/packages/coding-agent/src/autolearn/skill-usage.ts
+@@ -0,0 +1,170 @@
++/**
++ * Usage telemetry for managed (auto-learn) skills.
++ *
++ * A single JSON file (`<managed-skills>/usage.json`) keyed by skill name. It is
++ * runtime state, deliberately kept OUT of the `SKILL.md` bodies: the bodies are
++ * content a user may want to keep or version, this is a decaying counter the
++ * curator reads to decide staleness and archival.
++ *
++ * Every read is best-effort. A missing store is the normal cold-start case; a
++ * corrupt one degrades to "no telemetry" with a warning. Neither ever throws:
++ * the write side runs on the skill-injection path, where a telemetry failure
++ * must not break a real turn.
++ */
++import * as fs from "node:fs/promises";
++import * as path from "node:path";
++import { isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
++import { getManagedSkillsDir } from "./managed-skills";
++
++/** Lifecycle state of a managed skill. `active` is represented by the absence of `state`. */
++export type SkillUsageState = "active" | "stale";
++
++export interface SkillUsageRecord {
++	/** Times the skill body was injected into a turn (explicit invocation or autoload). */
++	useCount: number;
++	/** ISO timestamp of the most recent injection; absent until the first use. */
++	lastUsedAt?: string;
++	/** ISO timestamp of the first time this store observed the skill. */
++	createdAt: string;
++	/** Only the non-default state is persisted; `undefined` means active. */
++	state?: "stale";
++}
++
++export type SkillUsageStore = Record<string, SkillUsageRecord>;
++
++/**
++ * Coerce one on-disk entry into the typed record, or drop it. The store is
++ * parsed from a file a user can hand-edit, so shape is not guaranteed; a
++ * half-valid record would otherwise reach the curator as `NaN` timestamps and
++ * silently disable transitions for that skill.
++ */
++function normalizeRecord(value: unknown): SkillUsageRecord | undefined {
++	if (!isRecord(value)) return undefined;
++	const { createdAt, useCount, lastUsedAt, state } = value;
++	if (typeof createdAt !== "string") return undefined;
++	const record: SkillUsageRecord = {
++		useCount: typeof useCount === "number" && Number.isFinite(useCount) ? useCount : 0,
++		createdAt,
++	};
++	if (typeof lastUsedAt === "string") record.lastUsedAt = lastUsedAt;
++	if (state === "stale") record.state = "stale";
++	return record;
++}
++
++/** Read the whole store. Missing or unusable file → `{}`, never a throw. */
++export async function readAllSkillUsage(): Promise<SkillUsageStore> {
++	let parsed: unknown;
++	try {
++		parsed = await Bun.file(path.join(getManagedSkillsDir(), "usage.json")).json();
++	} catch (err) {
++		if (!isEnoent(err)) {
++			const error = err instanceof Error ? err.message : String(err);
++			logger.warn("Managed-skill usage store unreadable; treating as empty", { error });
++		}
++		return {};
++	}
++	if (!isRecord(parsed)) {
++		logger.warn("Managed-skill usage store is not an object; treating as empty");
++		return {};
++	}
++	const store: SkillUsageStore = {};
++	for (const [name, value] of Object.entries(parsed)) {
++		const record = normalizeRecord(value);
++		if (record) store[name] = record;
++	}
++	return store;
++}
++
++/** Read one skill's record, or `undefined` when the store has never seen it. */
++export async function getSkillUsage(name: string): Promise<SkillUsageRecord | undefined> {
++	return (await readAllSkillUsage())[name];
++}
++
++async function writeSkillUsageStore(store: SkillUsageStore): Promise<void> {
++	const target = path.join(getManagedSkillsDir(), "usage.json");
++	// Temp + rename in the same directory: a crash mid-write must never leave a
++	// truncated store behind, and the rename is atomic on the same filesystem.
++	// The random suffix keeps a concurrent writer in another process from
++	// colliding on the temp path. `Bun.write` creates the parent directory.
++	const tempPath = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
++	try {
++		await Bun.write(tempPath, JSON.stringify(store));
++		await fs.rename(tempPath, target);
++	} catch (err) {
++		await fs.rm(tempPath, { force: true }).catch(() => undefined);
++		throw err;
++	}
++}
++
++/**
++ * Serialize every mutation through one process-local chain.
++ *
++ * Unlike `serializeSkillMutation` in `managed-skills.ts`, this chain is NOT
++ * keyed by skill name: the store is a single file shared by all names, so a
++ * per-name chain would still let two different skills interleave their
++ * read-modify-write and lose an update. The critical section is a few hundred
++ * bytes of JSON, so there is nothing to gain from finer granularity.
++ * In-process only; cross-process races are out of scope (the rename keeps the
++ * file readable either way, and the loser just loses one increment).
++ */
++let usageMutationChain: Promise<unknown> = Promise.resolve();
++
++/**
++ * Read-modify-write the whole store under the mutation chain. `mutate` receives
++ * a fresh snapshot and returns whether it changed anything — a `false` return
++ * skips the disk write entirely, which is the common case for the curator.
++ *
++ * Exported so the curator can apply a whole pass' worth of transitions against
++ * one consistent snapshot instead of N read-modify-write cycles.
++ */
++export function updateSkillUsage(mutate: (store: SkillUsageStore) => boolean): Promise<void> {
++	const run = usageMutationChain.then(async () => {
++		const store = await readAllSkillUsage();
++		if (!mutate(store)) return;
++		await writeSkillUsageStore(store);
++	});
++	usageMutationChain = run.catch(() => {});
++	return run;
++}
++
++/**
++ * Record one injection of a managed skill.
++ *
++ * Deliberately does NOT clear a `stale` marker: reactivation is a curator
++ * decision so the next pass can report it. The counters are the raw signal, the
++ * state machine reads them.
++ */
++export function bumpSkillUse(name: string): Promise<void> {
++	const now = new Date().toISOString();
++	return updateSkillUsage(store => {
++		const record = store[name];
++		if (record) {
++			record.useCount += 1;
++			record.lastUsedAt = now;
++		} else {
++			store[name] = { useCount: 1, createdAt: now, lastUsedAt: now };
++		}
++		return true;
++	});
++}
++
++/**
++ * Flip a skill's lifecycle state. No-op when the skill has no record (nothing
++ * has observed it yet) or when it is already in the requested state.
++ */
++export function setSkillUsageState(name: string, state: SkillUsageState): Promise<void> {
++	return updateSkillUsage(store => {
++		const record = store[name];
++		if (!record) return false;
++		if (state === "stale") {
++			if (record.state === "stale") return false;
++			record.state = "stale";
++			return true;
++		}
++		if (record.state === undefined) return false;
++		// `undefined` rather than `delete`: JSON.stringify omits it, and the
++		// record keeps its hidden class.
++		record.state = undefined;
++		return true;
++	});
++}
+diff --git a/packages/coding-agent/src/config/settings-schema.ts b/packages/coding-agent/src/config/settings-schema.ts
+index 000f5cef3b..9c6ceab241 100644
+--- a/packages/coding-agent/src/config/settings-schema.ts
++++ b/packages/coding-agent/src/config/settings-schema.ts
+@@ -2675,6 +2675,10 @@ export const SETTINGS_SCHEMA = {
+ 	},
+ 	// Config-file-only knob (numbers without `options` are hidden from the UI).
+ 	"autolearn.minToolCalls": { type: "number", default: 5 },
++	// Skill-lifecycle curator clocks, also config-file-only. Defaults mirror the
++	// prior art these were ported from (stale 30d, archive 90d).
++	"autolearn.curator.staleAfterDays": { type: "number", default: 30 },
++	"autolearn.curator.archiveAfterDays": { type: "number", default: 90 },
+ 
+ 	// Mnemopi local SQLite memory backend.
+ 	"mnemopi.dbPath": {
+diff --git a/packages/coding-agent/src/extensibility/skills.ts b/packages/coding-agent/src/extensibility/skills.ts
+index 3caa6348c0..6e50d77ba1 100644
+--- a/packages/coding-agent/src/extensibility/skills.ts
++++ b/packages/coding-agent/src/extensibility/skills.ts
+@@ -1,11 +1,12 @@
+ import * as fs from "node:fs/promises";
+ import * as os from "node:os";
+-import { getProjectDir, prompt } from "@oh-my-pi/pi-utils";
++import { getProjectDir, logger, prompt } from "@oh-my-pi/pi-utils";
+ import {
+ 	isValidManagedSkillName,
+ 	MANAGED_SKILLS_PROVIDER_ID,
+ 	sanitizeManagedDescription,
+ } from "../autolearn/managed-skills";
++import { bumpSkillUse } from "../autolearn/skill-usage";
+ import { skillCapability } from "../capability/skill";
+ import type { SourceMeta } from "../capability/types";
+ import type { SkillsSettings } from "../config/settings";
+@@ -489,10 +490,23 @@ function startsWithLocalExecutionPrefix(trimmedStart: string): boolean {
+ export type SkillInvocationKind = "user" | "autoload";
+ 
+ export async function buildSkillPromptMessage(
+-	skill: Pick<Skill, "name" | "filePath" | "baseDir">,
++	skill: Pick<Skill, "name" | "filePath" | "baseDir" | "_source">,
+ 	args: string,
+ 	invocation: SkillInvocationKind = "user",
+ ): Promise<BuiltSkillPromptMessage> {
++	// Injection — not discovery — is what "using" a skill means, and this is the
++	// single point every path funnels through (slash command, ACP, RPC, autoload).
++	// Managed skills only: authored skills are never curated, so telemetry on them
++	// would be data nothing reads. Fire-and-forget — a counter must never delay or
++	// fail a real turn.
++	if (skill._source?.provider === MANAGED_SKILLS_PROVIDER_ID) {
++		void bumpSkillUse(skill.name).catch(err => {
++			logger.warn("Managed-skill usage bump failed", {
++				name: skill.name,
++				error: err instanceof Error ? err.message : String(err),
++			});
++		});
++	}
+ 	const content = await Bun.file(skill.filePath).text();
+ 	const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
+ 	const trimmedArgs = args.trim();
+diff --git a/packages/coding-agent/src/prompts/system/autolearn-curator-report.md b/packages/coding-agent/src/prompts/system/autolearn-curator-report.md
+new file mode 100644
+index 0000000000..87862b6eab
+--- /dev/null
++++ b/packages/coding-agent/src/prompts/system/autolearn-curator-report.md
+@@ -0,0 +1,10 @@
++<system-reminder>
++Auto-learn skill curator ran at session start.
++{{#if archivedCount}}
++Archived (no recorded use in {{archiveAfterDays}}d; moved to `managed-skills/.archive/`, no longer loaded): {{join archived ", "}}
++{{/if}}
++{{#if markedStale}}
++Marked stale (no recorded use in {{staleAfterDays}}d; still loaded): {{pluralize markedStale "skill" "skills"}}
++{{/if}}
++No action needed. Restoring an archived skill is a move back out of `.archive/`.
++</system-reminder>
+diff --git a/packages/coding-agent/src/sdk.ts b/packages/coding-agent/src/sdk.ts
+index 9ea60c97c7..31c3813ed2 100644
+--- a/packages/coding-agent/src/sdk.ts
++++ b/packages/coding-agent/src/sdk.ts
+@@ -39,6 +39,7 @@ import {
+ } from "./advisor";
+ import { AsyncJobManager } from "./async";
+ import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
++import { applySkillCuratorTransitions, renderSkillCuratorReport } from "./autolearn/curator";
+ import { createAutoresearchExtension } from "./autoresearch";
+ import { loadCapability } from "./capability";
+ import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
+@@ -3828,6 +3829,31 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
+ 					settings,
+ 					capture: content => session.runAutolearnCapture(signal => runAutoLearnCapture(content, signal)),
+ 				});
++				// Managed skills accumulate forever otherwise, and each one costs
++				// `name` + `description` in every system prompt of every later
++				// session. Fire-and-forget: startup must never wait on a disk sweep,
++				// and a curation failure must never block a session.
++				const curatorOptions = {
++					staleAfterDays: settings.get("autolearn.curator.staleAfterDays"),
++					archiveAfterDays: settings.get("autolearn.curator.archiveAfterDays"),
++				};
++				void applySkillCuratorTransitions(curatorOptions)
++					.then(report => {
++						if (report.archived.length === 0 && report.markedStale === 0) return;
++						const message: Message = {
++							role: "developer",
++							content: [{ type: "text", text: renderSkillCuratorReport(report, curatorOptions) }],
++							attribution: "agent",
++							timestamp: Date.now(),
++						};
++						session.agent.appendMessage(message);
++						session.sessionManager.appendMessage(message);
++					})
++					.catch(error => {
++						logger.warn("Skill curator pass failed", {
++							error: error instanceof Error ? error.message : String(error),
++						});
++					});
+ 			} else {
+ 				void logger.time("startMemoryStartupTask", startMemoryBackend);
+ 			}
+diff --git a/packages/coding-agent/test/autolearn/curator.test.ts b/packages/coding-agent/test/autolearn/curator.test.ts
+new file mode 100644
+index 0000000000..bf4332cd5c
+--- /dev/null
++++ b/packages/coding-agent/test/autolearn/curator.test.ts
+@@ -0,0 +1,170 @@
++import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
++import * as fs from "node:fs/promises";
++import * as os from "node:os";
++import * as path from "node:path";
++import { applySkillCuratorTransitions, renderSkillCuratorReport } from "@oh-my-pi/pi-coding-agent/autolearn/curator";
++import { getManagedSkillsDir, writeManagedSkill } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
++import { bumpSkillUse, getSkillUsage, updateSkillUsage } from "@oh-my-pi/pi-coding-agent/autolearn/skill-usage";
++import "@oh-my-pi/pi-coding-agent/discovery";
++import { loadSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
++import { removeWithRetries } from "@oh-my-pi/pi-utils";
++import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
++
++const DAY_MS = 86_400_000;
++const DEFAULTS = { staleAfterDays: 30, archiveAfterDays: 90 };
++
++describe("managed-skill curator", () => {
++	let tempHome: string;
++	let tempCwd: string;
++	let managedDir: string;
++	let originalAgentDir: string;
++
++	beforeEach(async () => {
++		originalAgentDir = getAgentDir();
++		tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "omp-skill-curator-"));
++		// cwd MUST live under the fake home so loadSkills' ancestor walk cannot
++		// reach ambient /tmp/.omp fixtures (full-suite safety).
++		tempCwd = path.join(tempHome, "work");
++		await fs.mkdir(tempCwd, { recursive: true });
++		spyOn(os, "homedir").mockReturnValue(tempHome);
++		setAgentDir(path.join(tempHome, ".omp", "agent"));
++		managedDir = getManagedSkillsDir();
++	});
++
++	afterEach(async () => {
++		spyOn(os, "homedir").mockRestore();
++		setAgentDir(originalAgentDir);
++		await removeWithRetries(tempHome);
++	});
++
++	const skillFile = (name: string) => path.join(managedDir, name, "SKILL.md");
++	const archivedFile = (name: string) => path.join(managedDir, ".archive", name, "SKILL.md");
++
++	async function createSkill(name: string): Promise<void> {
++		await writeManagedSkill({ action: "create", name, description: `When to ${name}.`, body: `# ${name}` });
++	}
++
++	/**
++	 * Backdate a skill's usage clock through the store's own mutator, so the test
++	 * never encodes the on-disk JSON layout.
++	 */
++	async function seedUsage(name: string, options: { daysAgo: number; useCount: number }): Promise<void> {
++		const iso = new Date(Date.now() - options.daysAgo * DAY_MS).toISOString();
++		await updateSkillUsage(store => {
++			store[name] =
++				options.useCount > 0
++					? { useCount: options.useCount, createdAt: iso, lastUsedAt: iso }
++					: { useCount: 0, createdAt: iso };
++			return true;
++		});
++	}
++
++	it("seeds the clock on first sight and defers every decision to a later pass", async () => {
++		await createSkill("fresh");
++
++		const report = await applySkillCuratorTransitions(DEFAULTS);
++
++		expect(report).toEqual({ checked: 1, markedStale: 0, archived: [], reactivated: 0 });
++		expect(await getSkillUsage("fresh")).toMatchObject({ useCount: 0 });
++		expect(await Bun.file(skillFile("fresh")).exists()).toBe(true);
++	});
++
++	it("holds a never-used skill inside the stale window even when the archive clock is shorter", async () => {
++		await createSkill("unused");
++		await seedUsage("unused", { daysAgo: 5, useCount: 0 });
++
++		expect(await applySkillCuratorTransitions(DEFAULTS)).toMatchObject({ markedStale: 0, archived: [] });
++		// Grace floor: a misconfigured archive clock must not retire a skill whose
++		// trigger simply has not come up yet.
++		expect(await applySkillCuratorTransitions({ staleAfterDays: 30, archiveAfterDays: 1 })).toMatchObject({
++			markedStale: 0,
++			archived: [],
++		});
++		expect(await Bun.file(skillFile("unused")).exists()).toBe(true);
++		const unused = await getSkillUsage("unused");
++		expect(unused?.useCount).toBe(0);
++		expect(unused?.state).toBeUndefined();
++	});
++
++	it("marks a skill stale past the stale clock without moving its file", async () => {
++		await createSkill("dusty");
++		await seedUsage("dusty", { daysAgo: 45, useCount: 3 });
++
++		const report = await applySkillCuratorTransitions(DEFAULTS);
++
++		expect(report).toMatchObject({ checked: 1, markedStale: 1, archived: [], reactivated: 0 });
++		expect(await getSkillUsage("dusty")).toMatchObject({ useCount: 3, state: "stale" });
++		expect(await Bun.file(skillFile("dusty")).exists()).toBe(true);
++		// Already stale: a second pass must not double-count.
++		expect(await applySkillCuratorTransitions(DEFAULTS)).toMatchObject({ markedStale: 0, reactivated: 0 });
++	});
++
++	it("moves a skill past the archive clock out of the discovered set and drops its counters", async () => {
++		await createSkill("gone");
++		await seedUsage("gone", { daysAgo: 120, useCount: 7 });
++
++		const report = await applySkillCuratorTransitions(DEFAULTS);
++
++		expect(report).toMatchObject({ checked: 1, markedStale: 0, archived: ["gone"] });
++		expect(await Bun.file(archivedFile("gone")).exists()).toBe(true);
++		expect(await Bun.file(skillFile("gone")).exists()).toBe(false);
++		expect(await getSkillUsage("gone")).toBeUndefined();
++	});
++
++	it("keeps the newest body when a name is archived twice", async () => {
++		await createSkill("twice");
++		await seedUsage("twice", { daysAgo: 120, useCount: 1 });
++		await applySkillCuratorTransitions(DEFAULTS);
++
++		await writeManagedSkill({ action: "create", name: "twice", description: "Second take.", body: "# second" });
++		await seedUsage("twice", { daysAgo: 120, useCount: 1 });
++		const report = await applySkillCuratorTransitions(DEFAULTS);
++
++		expect(report.archived).toEqual(["twice"]);
++		expect(await Bun.file(archivedFile("twice")).text()).toContain("# second");
++	});
++
++	it("reactivates a stale skill that was used again", async () => {
++		await createSkill("revived");
++		await seedUsage("revived", { daysAgo: 45, useCount: 2 });
++		await applySkillCuratorTransitions(DEFAULTS);
++		expect(await getSkillUsage("revived")).toMatchObject({ state: "stale" });
++
++		await bumpSkillUse("revived");
++		const report = await applySkillCuratorTransitions(DEFAULTS);
++
++		expect(report).toMatchObject({ markedStale: 0, archived: [], reactivated: 1 });
++		const revived = await getSkillUsage("revived");
++		expect(revived?.useCount).toBe(3);
++		expect(revived?.state).toBeUndefined();
++	});
++
++	it("removes an archived skill from discovery while leaving authored skills untouched", async () => {
++		await createSkill("retired");
++		const authoredFile = path.join(path.dirname(managedDir), "skills", "kept", "SKILL.md");
++		await Bun.write(authoredFile, "---\nname: kept\ndescription: Authored and never used.\n---\n\n# kept\n");
++		await seedUsage("retired", { daysAgo: 120, useCount: 4 });
++
++		const before = await loadSkills({ cwd: tempCwd });
++		expect(before.skills.map(skill => skill.name).sort()).toEqual(["kept", "retired"]);
++
++		await applySkillCuratorTransitions(DEFAULTS);
++
++		const after = await loadSkills({ cwd: tempCwd });
++		expect(after.skills.map(skill => skill.name)).toEqual(["kept"]);
++		expect(after.warnings).toEqual([]);
++	});
++
++	it("names every archived skill and the stale count in the session report", async () => {
++		const message = renderSkillCuratorReport(
++			{ checked: 5, markedStale: 2, archived: ["alpha", "beta"], reactivated: 0 },
++			DEFAULTS,
++		);
++
++		expect(message).toContain("alpha");
++		expect(message).toContain("beta");
++		expect(message).toContain("2 skills");
++		expect(message).toContain("90d");
++		expect(message).toContain("30d");
++	});
++});
+diff --git a/packages/coding-agent/test/autolearn/skill-usage.test.ts b/packages/coding-agent/test/autolearn/skill-usage.test.ts
+new file mode 100644
+index 0000000000..288ff61dd2
+--- /dev/null
++++ b/packages/coding-agent/test/autolearn/skill-usage.test.ts
+@@ -0,0 +1,147 @@
++import { afterEach, beforeEach, describe, expect, it, setSystemTime, spyOn } from "bun:test";
++import * as fs from "node:fs/promises";
++import * as os from "node:os";
++import * as path from "node:path";
++import { getManagedSkillsDir, MANAGED_SKILLS_PROVIDER_ID } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
++import {
++	bumpSkillUse,
++	getSkillUsage,
++	readAllSkillUsage,
++	setSkillUsageState,
++	updateSkillUsage,
++} from "@oh-my-pi/pi-coding-agent/autolearn/skill-usage";
++import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
++import { removeWithRetries } from "@oh-my-pi/pi-utils";
++import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
++
++/**
++ * `buildSkillPromptMessage` bumps fire-and-forget. Every mutation runs on the
++ * store's own promise chain, so enqueueing a no-op mutation and awaiting it
++ * proves any earlier bump already landed on disk — no polling, no sleeping.
++ */
++function usageWritesSettled(): Promise<void> {
++	return updateSkillUsage(() => false);
++}
++
++describe("managed-skill usage telemetry", () => {
++	let tempHome: string;
++	let originalAgentDir: string;
++
++	beforeEach(async () => {
++		originalAgentDir = getAgentDir();
++		tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "omp-skill-usage-"));
++		spyOn(os, "homedir").mockReturnValue(tempHome);
++		setAgentDir(path.join(tempHome, ".omp", "agent"));
++	});
++
++	afterEach(async () => {
++		setSystemTime();
++		spyOn(os, "homedir").mockRestore();
++		setAgentDir(originalAgentDir);
++		await removeWithRetries(tempHome);
++	});
++
++	it("records the first use with a creation and last-use timestamp", async () => {
++		const before = Date.now();
++		await bumpSkillUse("alpha");
++		const record = await getSkillUsage("alpha");
++
++		expect(record?.useCount).toBe(1);
++		expect(record?.state).toBeUndefined();
++		expect(Date.parse(record?.createdAt ?? "")).toBeGreaterThanOrEqual(before);
++		expect(Date.parse(record?.lastUsedAt ?? "")).toBeGreaterThanOrEqual(before);
++	});
++
++	it("keeps createdAt while advancing the counter and last-use across bumps", async () => {
++		setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
++		await bumpSkillUse("alpha");
++		setSystemTime(new Date("2026-01-02T00:00:00.000Z"));
++		await bumpSkillUse("alpha");
++		const record = await getSkillUsage("alpha");
++
++		expect(record?.useCount).toBe(2);
++		expect(record?.createdAt).toBe("2026-01-01T00:00:00.000Z");
++		expect(record?.lastUsedAt).toBe("2026-01-02T00:00:00.000Z");
++	});
++
++	it("loses no increment when bumps race, on one name or across names", async () => {
++		await Promise.all([
++			...Array.from({ length: 25 }, () => bumpSkillUse("alpha")),
++			...Array.from({ length: 10 }, () => bumpSkillUse("beta")),
++		]);
++
++		const store = await readAllSkillUsage();
++		expect(store.alpha?.useCount).toBe(25);
++		expect(store.beta?.useCount).toBe(10);
++	});
++
++	it("treats a corrupt store as empty and recovers on the next write", async () => {
++		await Bun.write(path.join(getManagedSkillsDir(), "usage.json"), "{ this is not json");
++
++		expect(await readAllSkillUsage()).toEqual({});
++
++		await bumpSkillUse("alpha");
++		expect((await getSkillUsage("alpha"))?.useCount).toBe(1);
++	});
++
++	it("flips lifecycle state and leaves unknown skills alone", async () => {
++		await bumpSkillUse("alpha");
++
++		await setSkillUsageState("alpha", "stale");
++		expect((await getSkillUsage("alpha"))?.state).toBe("stale");
++
++		await setSkillUsageState("alpha", "active");
++		expect((await getSkillUsage("alpha"))?.state).toBeUndefined();
++
++		await setSkillUsageState("ghost", "stale");
++		expect(await getSkillUsage("ghost")).toBeUndefined();
++	});
++
++	it("keeps a stale marker on use so the curator owns reactivation", async () => {
++		await bumpSkillUse("alpha");
++		await setSkillUsageState("alpha", "stale");
++
++		await bumpSkillUse("alpha");
++		const record = await getSkillUsage("alpha");
++
++		expect(record?.useCount).toBe(2);
++		expect(record?.state).toBe("stale");
++	});
++
++	describe("injection accounting", () => {
++		async function createSkill(name: string, provider: string): Promise<Skill> {
++			const dir = path.join(tempHome, "skills", name);
++			const filePath = path.join(dir, "SKILL.md");
++			await Bun.write(filePath, `---\nname: ${name}\ndescription: Test skill\n---\n\nBody of ${name}.\n`);
++			return {
++				name,
++				description: "Test skill",
++				filePath,
++				baseDir: dir,
++				source: `${provider}:user`,
++				_source: { provider, providerName: provider, path: filePath, level: "user" },
++			};
++		}
++
++		it("counts a managed skill injected into a turn", async () => {
++			const skill = await createSkill("managed-one", MANAGED_SKILLS_PROVIDER_ID);
++
++			await buildSkillPromptMessage(skill, "");
++			await usageWritesSettled();
++			expect((await getSkillUsage("managed-one"))?.useCount).toBe(1);
++
++			await buildSkillPromptMessage(skill, "", "autoload");
++			await usageWritesSettled();
++			expect((await getSkillUsage("managed-one"))?.useCount).toBe(2);
++		});
++
++		it("never records an authored skill", async () => {
++			const authored = await createSkill("authored-one", "native");
++
++			await buildSkillPromptMessage(authored, "");
++			await usageWritesSettled();
++
++			expect(await readAllSkillUsage()).toEqual({});
++		});
++	});
++});
+diff --git a/packages/coding-agent/test/sdk-autolearn-active-tools.test.ts b/packages/coding-agent/test/sdk-autolearn-active-tools.test.ts
+index 6dd5201071..3e77b4b6fe 100644
+--- a/packages/coding-agent/test/sdk-autolearn-active-tools.test.ts
++++ b/packages/coding-agent/test/sdk-autolearn-active-tools.test.ts
+@@ -10,6 +10,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+ import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
++import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
+ 
+ // Guards the auto-learn tool ACTIVATION wiring in createAgentSession: createTools
+ // force-includes manage_skill into the built registry for an enabled top-level
+@@ -24,9 +25,17 @@ describe("createAgentSession auto-learn tool activation", () => {
+ 	let modelRegistry: ModelRegistry;
+ 	const sessions: AgentSession[] = [];
+ 
++	let originalAgentDir: string;
++
+ 	beforeAll(async () => {
+ 		registryDir = path.join(os.tmpdir(), `pi-autolearn-active-${Snowflake.next()}`);
+ 		fs.mkdirSync(registryDir, { recursive: true });
++		// Managed-skill discovery and the auto-learn curator resolve the managed
++		// root from the process-global agent dir, not from `createAgentSession`'s
++		// `agentDir` option. Without this, the auto-learn sessions below would
++		// read — and curate — the developer's real ~/.omp/agent/managed-skills.
++		originalAgentDir = getAgentDir();
++		setAgentDir(registryDir);
+ 		authStorage = await AuthStorage.create(path.join(registryDir, "auth.db"));
+ 		modelRegistry = new ModelRegistry(authStorage);
+ 	});
+@@ -34,6 +43,7 @@ describe("createAgentSession auto-learn tool activation", () => {
+ 	afterAll(async () => {
+ 		for (const session of sessions) await session.dispose().catch(() => {});
+ 		authStorage.close();
++		setAgentDir(originalAgentDir);
+ 		if (fs.existsSync(registryDir)) removeSyncWithRetries(registryDir);
+ 	});
+ 
+-- 
+2.55.0
+

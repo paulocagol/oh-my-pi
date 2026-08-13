@@ -1,0 +1,2141 @@
+From ea9a263af0fdb2dc475b1b5217772ea6db86815f Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Wed, 12 Aug 2026 21:33:06 -0300
+Subject: [PATCH 20/22] feat: adicionar /tui fullscreen com scroll suave por
+ report SGR
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Alternate-screen surface estilo Claude Code para o transcript primário: editor e footer fixos no rodapé, transcript rolável acima com PgUp/PgDn, Shift+PgUp/PgDn, Ctrl+Home/Ctrl+End e roda do mouse. Header sticky nomeia o prompt em tela e volta pra ele ao clicar; footer mostra quantas linhas chegaram desde a pausa do auto-follow. HUDs, loader, banners de erro e widgets de hook continuam ativos durante o fullscreen.
+
+Corrige o scroll descartando a rajada acelerada do Ghostty: cada report SGR nativo mantém o delta padrão de 3 linhas em vez de ser reduzido a 1, e cada report abre uma janela de renderização a 120fps (TUI.beginRenderBurst()) para pintar um frame por report em vez de poucos saltos grandes. Overlays fullscreen também ganham diff por linha no path de alt-screen (evita reescrever a tela inteira a cada frame) e cursor de hardware opcional.
+---
+ packages/coding-agent/CHANGELOG.md            |   2 +
+ .../primary-transcript-fullscreen.ts          | 417 ++++++++++++
+ .../modes/components/transcript-container.ts  |  46 ++
+ .../src/modes/components/user-message.ts      |   6 +
+ .../src/modes/interactive-mode.ts             |  68 +-
+ packages/coding-agent/src/modes/types.ts      |   1 +
+ .../src/slash-commands/builtin-control.ts     |  14 +
+ .../primary-transcript-fullscreen.test.ts     | 364 ++++++++++
+ packages/tui/CHANGELOG.md                     |  10 +
+ packages/tui/src/tui.ts                       | 229 ++++++-
+ .../test/adaptive-render-backpressure.test.ts |  61 ++
+ .../tui/test/alt-screen-live-surface.test.ts  | 628 ++++++++++++++++++
+ 12 files changed, 1816 insertions(+), 30 deletions(-)
+ create mode 100644 packages/coding-agent/src/modes/components/primary-transcript-fullscreen.ts
+ create mode 100644 packages/coding-agent/test/primary-transcript-fullscreen.test.ts
+ create mode 100644 packages/tui/test/alt-screen-live-surface.test.ts
+
+diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
+index 57e8061f9e..3dd4b287cc 100644
+--- a/packages/coding-agent/CHANGELOG.md
++++ b/packages/coding-agent/CHANGELOG.md
+@@ -3,6 +3,8 @@
+ ## [Unreleased]
+ - Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery. A docs root may carry the assets its Markdown links to — non-Markdown files are skipped, never indexed, and never resolvable — and `exclude` globs curate the generated index without becoming an access-control boundary.
+ - Routed the `omp grep` subcommand through the agent's grep tool whenever its path is an internal URL, so `omp grep <pattern> vitrine.se://` searches the catalog instead of failing against a nonexistent `<cwd>/vitrine.se:` path; virtual schemes such as `omp://` resolve too. Filesystem searches keep the native code path and output, while flags the tool cannot honor — `--glob`, `--files`, `--count`, and out-of-range `--limit`/`--context` — fail with an explicit error instead of returning a silently narrowed result.
++- Added `/tui fullscreen`, a Claude Code-style alternate-screen surface for the live primary transcript: the editor and a hint/status footer stay pinned at the bottom while the transcript scrolls above them with `PgUp`/`PgDn`, `Shift+PgUp`/`Shift+PgDn` (jump prompt to prompt), `Ctrl+Home`/`Ctrl+End`, and the mouse wheel. A sticky header names the user prompt whose section is on screen and snaps back to it when clicked, the viewport stays anchored to that prompt while blocks above it keep streaming, and the footer reports how many rows arrived since auto-follow paused. The surface keeps the rest of the interactive chrome alive between the transcript and the editor — working loader, token/cost readout, todo and subagent HUDs, error banners, pending messages, and hook widgets — so a streaming turn looks the same as it does in the default renderer, and it reserves the scrollbar column at all times so crossing one screenful never reflows the transcript by a column. `/tui default` (or `/tui close`) restores the native-scrollback renderer and `/tui status` reports the active mode; the preference applies to the current session only.
++- Fixed fullscreen transcript wheel scrolling discarding Ghostty's accelerated burst: each native SGR wheel report now retains the terminal's default three-row discrete delta instead of being reduced to one row when reports arrive within the same burst, and each report opens a display-rate render window so a fast spin paints one frame per report instead of landing as a few large jumps. Measured over a 450 ms gesture of 50 native reports: 14 paints moving a median of 11 rows each before, 49 paints moving a median of 3 rows each after — the smoothness costs ~3.5x the bytes for the duration of the gesture, bounded by the alt-screen per-line diff and the engine's adaptive backpressure.
+ 
+ ## [17.2.15] - 2026-08-12
+ 
+diff --git a/packages/coding-agent/src/modes/components/primary-transcript-fullscreen.ts b/packages/coding-agent/src/modes/components/primary-transcript-fullscreen.ts
+new file mode 100644
+index 0000000000..6ae63a8466
+--- /dev/null
++++ b/packages/coding-agent/src/modes/components/primary-transcript-fullscreen.ts
+@@ -0,0 +1,417 @@
++import {
++	type Component,
++	Ellipsis,
++	matchesKey,
++	type OverlayFocusOwner,
++	routeSgrMouseInput,
++	ScrollView,
++	type SgrMouseEvent,
++	type TUI,
++	visibleWidth,
++} from "@oh-my-pi/pi-tui";
++import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
++import { theme } from "../theme/theme";
++import type { CustomEditor } from "./custom-editor";
++import type { TranscriptContainer, TranscriptPromptAnchor } from "./transcript-container";
++
++/** Single-line cap for the sticky prompt header. */
++const STICKY_TEXT_CAP = 240;
++/**
++ * Footer hint sets, widest first. A narrow terminal steps down to the next one
++ * instead of dropping every hint at once.
++ */
++const FOOTER_HINTS = [
++	"Esc: sair · PgUp/PgDn: rolar · Shift+PgUp/PgDn: prompt · Ctrl+Home/End: início/fim",
++	"Esc: sair · PgUp/PgDn · Shift+PgUp/PgDn · Ctrl+Home/End",
++	"Esc: sair · PgUp/PgDn · Ctrl+Home/End",
++	"Esc: sair",
++	"",
++] as const;
++
++export interface PrimaryTranscriptFullscreenDeps {
++	ui: TUI;
++	transcript: TranscriptContainer;
++	editor: Pick<CustomEditor, "getText" | "render">;
++	/**
++	 * Live chrome that sits between the transcript and the editor in the normal
++	 * component tree — pending messages, the todo and subagent HUDs, error
++	 * banners, the working loader and the status line. The fullscreen frame
++	 * composes over an empty base, so whatever is not listed here is simply not
++	 * on screen while the surface is up.
++	 */
++	chromeAbove: readonly Component[];
++	/** Chrome rendered below the editor (hook widgets), same tree order. */
++	chromeBelow: readonly Component[];
++	onClose: () => void;
++}
++
++/** Where the viewport is pinned while auto-follow is paused. */
++interface ScrollAnchor {
++	/** The prompt block itself: a rebuild reorders indices, but identity survives. */
++	prompt: Component;
++	/** Rows between that prompt's first row and the viewport top. */
++	rowsBelow: number;
++}
++
++/**
++ * Collapse a prompt to the single line shown in the sticky header: first
++ * paragraph only, whitespace flattened. A prompt like `"still broken:\n\n1. a"`
++ * previews as just its lead-in, matching Claude Code's header.
++ */
++function collapsePrompt(text: string): string {
++	const trimmed = text.trimStart();
++	const paragraphEnd = trimmed.search(/\n\s*\n/);
++	return (paragraphEnd >= 0 ? trimmed.slice(0, paragraphEnd) : trimmed)
++		.slice(0, STICKY_TEXT_CAP)
++		.replace(/\s+/g, " ")
++		.trim();
++}
++
++/**
++ * Index of the last prompt starting strictly above `top` — the prompt whose
++ * section the reader is inside. `anchors` is ascending by row, so binary search.
++ */
++function promptAbove(anchors: readonly TranscriptPromptAnchor[], top: number): number {
++	let low = 0;
++	let high = anchors.length - 1;
++	let found = -1;
++	while (low <= high) {
++		const mid = (low + high) >> 1;
++		if (anchors[mid]!.row < top) {
++			found = mid;
++			low = mid + 1;
++		} else {
++			high = mid - 1;
++		}
++	}
++	return found;
++}
++
++/** Append each component's rows to `out`, in tree order. */
++function renderInto(components: readonly Component[], width: number, out: string[]): void {
++	for (const component of components) {
++		const lines = component.render(width);
++		for (let i = 0; i < lines.length; i++) out.push(lines[i]!);
++	}
++}
++
++/**
++ * Claude-style fullscreen surface for the live primary transcript.
++ *
++ * It deliberately reuses the existing transcript renderer and editor instead of
++ * changing the append-only native-scrollback engine. The alternate-screen host
++ * gives this component its own viewport; ScrollView keeps the editor fixed below
++ * it and owns manual transcript scrolling.
++ *
++ * Scroll position is stored as a *prompt anchor* (which prompt, how many rows
++ * below it) rather than a line offset, so a block above the viewport that
++ * reflows or grows mid-stream does not slide text out from under the reader.
++ * A one-line sticky header names the prompt whose section is on screen —
++ * reserved in both states so the geometry never shifts — and clicking it snaps
++ * that prompt to the viewport top.
++ *
++ * The editor, the live chrome around it and the footer are anchored to the
++ * bottom of the screen; the transcript viewport absorbs every size change, so
++ * the prompt never moves under the user's hands when the working loader or a
++ * HUD appears mid-stream.
++ */
++export class PrimaryTranscriptFullscreen implements Component, OverlayFocusOwner {
++	readonly #deps: PrimaryTranscriptFullscreenDeps;
++	readonly #scrollView: ScrollView;
++	#followBottom = true;
++	#anchor: ScrollAnchor | undefined;
++	/** Prompt anchors of the last render; owned here because the container recycles its buffer. */
++	readonly #prompts: TranscriptPromptAnchor[] = [];
++	/** Rendered chrome rows of the current frame; reused to keep streaming allocation-free. */
++	readonly #chromeAboveLines: string[] = [];
++	readonly #chromeBelowLines: string[] = [];
++	/** The frame buffer handed to the compositor, which copies it before we touch it again. */
++	readonly #frame: string[] = [];
++	/** Transcript row the sticky header points at, or -1 when it names no prompt. */
++	#stickyRow = -1;
++	/** Transcript height when auto-follow was paused, for the "new rows" indicator. */
++	#rowsAtPause = 0;
++	#totalRows = 0;
++	#viewportHeight = 1;
++	/** Screen row of the jump-to-bottom footer, or -1 when the screen is too short for one. */
++	#footerRow = -1;
++	#removeInputListener: (() => void) | undefined;
++	#closed = false;
++
++	constructor(deps: PrimaryTranscriptFullscreenDeps) {
++		this.#deps = deps;
++		this.#scrollView = new ScrollView([], {
++			height: 1,
++			// Reserve the bar column even when the content fits: the transcript is
++			// rendered one column narrower to match, so passing the one-screen mark
++			// no longer reflows every line by a column.
++			scrollbar: "always",
++			// Rows arrive already wrapped to the content width; only trailing
++			// padding can overflow, and an ellipsis there would land on every line.
++			ellipsis: Ellipsis.Omit,
++			theme: {
++				track: text => theme.fg("dim", text),
++				thumb: text => theme.fg("accent", text),
++			},
++		});
++		this.#removeInputListener = deps.ui.addInputListener(data => {
++			if (this.#closed) return undefined;
++			if (data.startsWith("\x1b[<")) {
++				return routeSgrMouseInput(data, event => this.#handleMouse(event)) ? { consume: true } : undefined;
++			}
++			return this.#handleKey(data) ? { consume: true } : undefined;
++		});
++	}
++
++	ownsOverlayFocusTarget(component: Component): boolean {
++		return component === this.#deps.editor;
++	}
++
++	close(): void {
++		if (this.#closed) return;
++		this.#closed = true;
++		this.#removeInputListener?.();
++		this.#removeInputListener = undefined;
++		this.#deps.onClose();
++	}
++
++	dispose(): void {
++		this.#removeInputListener?.();
++		this.#removeInputListener = undefined;
++	}
++
++	invalidate(): void {
++		this.#scrollView.invalidate();
++	}
++
++	/**
++	 * Scroll keys are consumed ahead of the focused editor (input listeners run
++	 * first). Only chords the editor cannot use for text are bound: no bare
++	 * letters, no bare arrows, so typing and prompt history keep working while
++	 * the transcript stays navigable.
++	 */
++	#handleKey(data: string): boolean {
++		// Esc closes only on an empty draft; with text it keeps its clear-draft meaning.
++		if (matchesKey(data, "escape") && this.#deps.editor.getText().trim() === "") {
++			this.close();
++			return true;
++		}
++		if (matchesKey(data, "shift+pageUp")) return this.#jumpPrompt(-1);
++		if (matchesKey(data, "shift+pageDown")) return this.#jumpPrompt(1);
++		// Half-screen paging, matching Claude Code's PgUp/PgDn.
++		const half = Math.max(1, Math.floor(this.#viewportHeight / 2));
++		if (matchesKey(data, "pageUp")) return this.#scrollBy(-half);
++		if (matchesKey(data, "pageDown")) return this.#scrollBy(half);
++		if (matchesKey(data, "ctrl+home")) return this.#scrollTo(0);
++		if (matchesKey(data, "ctrl+end")) return this.#follow();
++		return false;
++	}
++
++	#handleMouse(event: SgrMouseEvent): boolean {
++		// Ghostty's acceleration arrives as a burst of native wheel reports, one
++		// per three-row step of its own viewport. Keep that delta and ask the
++		// engine to sample at display rate for the length of the gesture:
++		// coalescing the burst into 30 fps frames is what turns a smooth scroll
++		// into ~9-row jumps.
++		if (event.wheel !== null) {
++			this.#deps.ui.beginRenderBurst();
++			return this.#scrollBy(event.wheel * 3);
++		}
++		if (!event.leftClick) return false;
++		// The fullscreen frame paints from screen row 0, so mouse rows index the
++		// lines this component returned: row 0 is the sticky header when present,
++		// and the footer doubles as the jump-to-bottom button.
++		if (event.row === 0 && this.#stickyRow >= 0) return this.#scrollTo(this.#stickyRow);
++		if (event.row === this.#footerRow && !this.#followBottom) return this.#follow();
++		return false;
++	}
++
++	#scrollBy(delta: number): boolean {
++		return this.#scrollTo(this.#scrollView.getScrollOffset() + delta);
++	}
++
++	/** Pin the viewport at an absolute transcript row, pausing auto-follow. */
++	#scrollTo(offset: number): boolean {
++		this.#scrollView.setScrollOffset(offset);
++		const settled = this.#scrollView.getScrollOffset();
++		// Reaching the bottom by any means resumes following, like every chat view.
++		if (settled >= this.#scrollView.getMaxScrollOffset()) return this.#follow();
++		if (this.#followBottom) {
++			this.#followBottom = false;
++			this.#rowsAtPause = this.#totalRows;
++		}
++		this.#anchor = this.#deriveAnchor(settled);
++		this.#deps.ui.requestRender();
++		return true;
++	}
++
++	/** Resume auto-follow and jump to the newest output. */
++	#follow(): boolean {
++		this.#followBottom = true;
++		this.#anchor = undefined;
++		this.#rowsAtPause = this.#totalRows;
++		this.#scrollView.scrollToBottom();
++		this.#deps.ui.requestRender();
++		return true;
++	}
++
++	/** Snap to the previous (-1) or next (+1) prompt relative to the viewport top. */
++	#jumpPrompt(direction: -1 | 1): boolean {
++		if (this.#prompts.length === 0) return false;
++		const top = this.#scrollView.getScrollOffset();
++		if (direction < 0) {
++			const index = promptAbove(this.#prompts, top);
++			return this.#scrollTo(index < 0 ? 0 : this.#prompts[index]!.row);
++		}
++		const next = this.#prompts.find(prompt => prompt.row > top);
++		return next === undefined ? this.#follow() : this.#scrollTo(next.row);
++	}
++
++	#deriveAnchor(top: number): ScrollAnchor | undefined {
++		const index = promptAbove(this.#prompts, top + 1);
++		if (index < 0) return undefined;
++		const prompt = this.#prompts[index]!;
++		return { prompt: prompt.component, rowsBelow: top - prompt.row };
++	}
++
++	/**
++	 * Absolute row the stored anchor resolves to against the current render, or
++	 * `undefined` once its prompt is gone (a rebuild, `/clear`, or a replaced
++	 * optimistic message), in which case the viewport keeps its last offset
++	 * rather than snapping to an unrelated prompt.
++	 */
++	#resolveAnchor(): number | undefined {
++		if (this.#anchor === undefined) return undefined;
++		const prompt = this.#prompts.find(candidate => candidate.component === this.#anchor?.prompt);
++		if (prompt === undefined) return undefined;
++		return Math.max(0, prompt.row + this.#anchor.rowsBelow);
++	}
++
++	/**
++	 * The reserved header row: the prompt whose section is on screen, or a
++	 * start-of-conversation marker when the reader is above the first prompt.
++	 */
++	#headerLine(stickyIndex: number): string {
++		const text = stickyIndex < 0 ? "" : collapsePrompt(this.#prompts[stickyIndex]!.text);
++		return text === "" ? theme.fg("dim", "↑ início da conversa") : theme.fg("accent", `↳ ${text}`);
++	}
++
++	/** Right-edge status, long form first. */
++	#footerStatus(long: boolean): string {
++		if (this.#followBottom) return long ? "seguindo o fim" : "no fim";
++		const newRows = Math.max(0, this.#totalRows - this.#rowsAtPause);
++		if (newRows === 0) return long ? "↓ clique para ir ao fim" : "↓ ir ao fim";
++		const label = `↓ ${newRows} ${newRows === 1 ? "linha nova" : "linhas novas"}`;
++		return long ? `${label} · clique para ir ao fim` : label;
++	}
++
++	/** Hints, gap, right-anchored status — or `undefined` when the status alone overflows. */
++	#composeFooter(width: number, status: string): string | undefined {
++		const statusWidth = visibleWidth(status);
++		if (statusWidth > width) return undefined;
++		for (const hints of FOOTER_HINTS) {
++			const gap = width - visibleWidth(hints) - statusWidth;
++			// A visible hint set needs at least one blank column before the status.
++			if (gap < (hints === "" ? 0 : 1)) continue;
++			const right = this.#followBottom ? theme.fg("dim", status) : theme.fg("accent", status);
++			return `${hints === "" ? "" : theme.fg("dim", hints)}${" ".repeat(gap)}${right}`;
++		}
++		return undefined;
++	}
++
++	/**
++	 * The status keeps its right anchor at every width: a narrow terminal steps
++	 * the hints down through {@link FOOTER_HINTS} and only then shortens the
++	 * status itself. Anchoring matters most exactly when the new-rows counter
++	 * widens the status, which is while the reader is scrolled back watching it.
++	 */
++	#footerLine(width: number): string {
++		const long = this.#composeFooter(width, this.#footerStatus(true));
++		if (long !== undefined) return long;
++		const short = this.#footerStatus(false);
++		const composed = this.#composeFooter(width, short);
++		if (composed !== undefined) return composed;
++		return truncateToWidth(this.#followBottom ? theme.fg("dim", short) : theme.fg("accent", short), width);
++	}
++
++	render(width: number): readonly string[] {
++		const safeWidth = Math.max(1, width);
++		const height = Math.max(1, this.#deps.ui.terminal.rows || 24);
++		// The scrollbar column is reserved unconditionally, so the transcript is
++		// laid out at one stable content width: no stray `…` on every full row,
++		// and no one-column reflow of the whole screen the moment the
++		// conversation grows past a single screenful.
++		const contentWidth = Math.max(1, safeWidth - 1);
++
++		const editorLines = this.#deps.editor.render(safeWidth);
++		const above = this.#chromeAboveLines;
++		above.length = 0;
++		renderInto(this.#deps.chromeAbove, safeWidth, above);
++		const below = this.#chromeBelowLines;
++		below.length = 0;
++		renderInto(this.#deps.chromeBelow, safeWidth, below);
++		const content = this.#deps.transcript.render(contentWidth);
++		this.#totalRows = content.length;
++		// Own a copy: the container recycles its anchor buffer, and the key/mouse
++		// handlers read these rows between renders.
++		const prompts = this.#prompts;
++		prompts.length = 0;
++		for (const anchor of this.#deps.transcript.getPromptAnchors()) prompts.push(anchor);
++
++		// Header and footer are permanent rows. Reserving the header while
++		// following too makes the geometry identical in both states, so pausing
++		// or resuming auto-follow no longer slides the transcript by one row.
++		const footerRows = height >= 2 ? 1 : 0;
++		const headerRows = height >= 3 ? 1 : 0;
++		const bodyRows = height - headerRows - footerRows;
++		// Row budget, in priority order: the editor (never clipped away, never
++		// the whole screen either), then the chrome, then the transcript. The
++		// surface returns exactly `height` rows, so the compositor never has to
++		// drop a tail — which is what used to swallow the footer whenever the
++		// autocomplete popup grew past the bottom of the screen.
++		const editorRows = Math.min(editorLines.length, bodyRows >= 2 ? bodyRows - 1 : bodyRows);
++		const chromeRoom = Math.max(0, bodyRows - editorRows - 1);
++		// Chrome overflow drops from the top of `chromeAbove`: its tail holds the
++		// working loader and the status line, the rows worth keeping.
++		const aboveRows = Math.min(above.length, chromeRoom);
++		const belowRows = Math.min(below.length, chromeRoom - aboveRows);
++		const viewportRows = bodyRows - editorRows - aboveRows - belowRows;
++		this.#viewportHeight = Math.max(1, viewportRows);
++		this.#footerRow = footerRows === 0 ? -1 : height - 1;
++
++		// A transcript shorter than its viewport rests on the editor instead of
++		// hanging from the top row with a gap underneath it.
++		const scrollRows = Math.min(this.#totalRows, viewportRows);
++		this.#scrollView.setLines(content);
++		this.#scrollView.setHeight(scrollRows);
++		if (this.#followBottom) {
++			this.#scrollView.scrollToBottom();
++			this.#rowsAtPause = this.#totalRows;
++		} else {
++			const anchoredTop = this.#resolveAnchor();
++			if (anchoredTop !== undefined) this.#scrollView.setScrollOffset(anchoredTop);
++		}
++
++		// Chosen *after* the offset is clamped, from the row the reader will see.
++		// A prompt sitting exactly on the top row belongs to the section on
++		// screen, the same boundary the scroll anchor uses: under the old strict
++		// rule, clicking the header snapped that prompt to the top and the header
++		// immediately renamed itself to the previous section.
++		const top = this.#scrollView.getScrollOffset();
++		const stickyIndex = headerRows === 0 ? -1 : promptAbove(prompts, top + 1);
++		this.#stickyRow = stickyIndex < 0 ? -1 : prompts[stickyIndex]!.row;
++
++		const frame = this.#frame;
++		frame.length = 0;
++		if (headerRows === 1) frame.push(truncateToWidth(replaceTabs(this.#headerLine(stickyIndex)), safeWidth));
++		for (let pad = viewportRows - scrollRows; pad > 0; pad--) frame.push("");
++		const viewport = this.#scrollView.render(safeWidth);
++		for (let i = 0; i < viewport.length; i++) frame.push(viewport[i]!);
++		for (let i = above.length - aboveRows; i < above.length; i++) frame.push(above[i]!);
++		for (let i = 0; i < editorRows; i++) frame.push(editorLines[i]!);
++		for (let i = 0; i < belowRows; i++) frame.push(below[i]!);
++		// Footer last: it reports the position this frame settled on.
++		if (footerRows === 1) frame.push(this.#footerLine(safeWidth));
++		return frame;
++	}
++}
+diff --git a/packages/coding-agent/src/modes/components/transcript-container.ts b/packages/coding-agent/src/modes/components/transcript-container.ts
+index 8e4902c07e..6ab8ea1ff6 100644
+--- a/packages/coding-agent/src/modes/components/transcript-container.ts
++++ b/packages/coding-agent/src/modes/components/transcript-container.ts
+@@ -7,6 +7,17 @@ import {
+ 	type ViewportTailProvider,
+ } from "@oh-my-pi/pi-tui";
+ import { isToolActivityComponent } from "./tool-activity";
++import { UserMessageComponent } from "./user-message";
++
++/** A user prompt block located in the most recent transcript render. */
++export interface TranscriptPromptAnchor {
++	/** The prompt block itself, so callers can re-find it after a rebuild reorders indices. */
++	component: Component;
++	/** Frame row of the prompt's first emitted content row. */
++	row: number;
++	/** The prompt text as typed. */
++	text: string;
++}
+ 
+ /**
+  * A transcript block that is still mutating (a foreground tool awaiting its
+@@ -184,6 +195,8 @@ export class TranscriptContainer
+ 	// consumes the report and re-bases the baseline). Out-of-band renders
+ 	// between engine frames lower it; they can never inflate it.
+ 	#stableRowsFloor = 0;
++	// Recycled scratch buffer for getPromptAnchors(); rebuilt on every call.
++	#promptAnchors: TranscriptPromptAnchor[] = [];
+ 	override addChild(component: Component): void {
+ 		if (isToolActivityComponent(component)) component.setToolActivityVisible(this.#toolActivityVisible);
+ 		super.addChild(component);
+@@ -198,6 +211,39 @@ export class TranscriptContainer
+ 		this.invalidate();
+ 	}
+ 
++	/**
++	 * User prompts in the most recent {@link render}, in transcript order, each
++	 * with the frame row its first content line landed on. The fullscreen surface
++	 * uses this to anchor its sticky prompt header and prompt jumps to blocks
++	 * instead of raw line offsets, which survive reflow and streaming growth.
++	 *
++	 * The returned array is a recycled buffer rebuilt on each call from the most
++	 * recent render's block geometry; callers must consume it before the next
++	 * call rather than retaining it.
++	 */
++	getPromptAnchors(): readonly TranscriptPromptAnchor[] {
++		const anchors = this.#promptAnchors;
++		anchors.length = 0;
++		for (let i = 0; i < this.children.length; i++) {
++			const child = this.children[i];
++			if (!(child instanceof UserMessageComponent) || child.synthetic || child.text === "") continue;
++			const segment = this.#segments[i];
++			if (segment === undefined || segment.component !== child || segment.rowCount === 0) continue;
++			// Skip the bubble's painted top padding: those rows carry a background
++			// colour, so transcript assembly does not strip them as blank edges, and
++			// anchoring there would park the prompt's text one row off screen.
++			let offset = 0;
++			while (
++				offset < segment.contribution.length - 1 &&
++				Bun.stripANSI(segment.contribution[offset]!).trim() === ""
++			) {
++				offset++;
++			}
++			anchors.push({ component: child, row: segment.startRow + segment.sep + offset, text: child.text });
++		}
++		return anchors;
++	}
++
+ 	override invalidate(): void {
+ 		// Theme/global invalidation: retire every diff snapshot so stale styling
+ 		// is not diffed against the recolored render.
+diff --git a/packages/coding-agent/src/modes/components/user-message.ts b/packages/coding-agent/src/modes/components/user-message.ts
+index cddef8d381..9476d3b94e 100644
+--- a/packages/coding-agent/src/modes/components/user-message.ts
++++ b/packages/coding-agent/src/modes/components/user-message.ts
+@@ -36,9 +36,15 @@ export class UserMessageComponent extends Container {
+ 	// never mutates the container's cached array.
+ 	#zoneSource: readonly string[] | undefined;
+ 	#zoneLines: string[] | undefined;
++	/** Raw prompt text, read by the fullscreen surface for its sticky prompt header. */
++	readonly text: string;
++	/** True for developer/agent-attributed inputs, which are not user prompts. */
++	readonly synthetic: boolean;
+ 
+ 	constructor(text: string, synthetic = false, imageLinks?: readonly (string | undefined)[]) {
+ 		super();
++		this.text = text;
++		this.synthetic = synthetic;
+ 		const bgColor = (value: string) => theme.bg("userMessageBg", value);
+ 		// Paint the magic keywords ("ultrathink"/"orchestrate"/"workflowz") inside the rendered
+ 		// bubble too — matching the live editor glow. The Markdown component routes code spans and
+diff --git a/packages/coding-agent/src/modes/interactive-mode.ts b/packages/coding-agent/src/modes/interactive-mode.ts
+index 3448f28b6d..9397749512 100644
+--- a/packages/coding-agent/src/modes/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive-mode.ts
+@@ -163,6 +163,7 @@ import type { HookEditorComponent } from "./components/hook-editor";
+ import type { HookInputComponent } from "./components/hook-input";
+ import type { HookSelectorComponent, HookSelectorSlider } from "./components/hook-selector";
+ import { type PlanReviewAnnotationState, PlanReviewOverlay } from "./components/plan-review-overlay";
++import { PrimaryTranscriptFullscreen } from "./components/primary-transcript-fullscreen";
+ import { StatusLineComponent } from "./components/status-line";
+ import type { ToolExecutionHandle } from "./components/tool-execution";
+ import { TranscriptContainer } from "./components/transcript-container";
+@@ -634,6 +635,7 @@ export class InteractiveMode implements InteractiveModeContext {
+ 	#pendingPlanModelSwitch = false;
+ 	#planModeHasEntered = false;
+ 	#planReviewOverlay: PlanReviewOverlay | undefined;
++	#primaryTranscriptFullscreen: PrimaryTranscriptFullscreen | undefined;
+ 	#planReviewOverlayHandle: OverlayHandle | undefined;
+ 	#planReviewCancel: (() => void) | undefined;
+ 	/** Serializable review annotations keyed by the resolved plan file path. */
+@@ -4334,13 +4336,77 @@ export class InteractiveMode implements InteractiveModeContext {
+ 		this.chatContainer.addChild(item);
+ 		if (item instanceof ChatBlock) item.mount(this.#chatHost);
+ 	}
+-
+ 	resetTranscript(): void {
+ 		this.transcriptMessageComponents = new WeakMap<AgentMessage, Component>();
+ 		this.chatContainer.dispose();
+ 		this.chatContainer.clear();
+ 	}
+ 
++	setPrimaryTranscriptFullscreen(mode: string): void {
++		const normalized = mode.trim().toLowerCase();
++		if (normalized === "" || normalized === "status") {
++			this.showStatus(
++				this.#primaryTranscriptFullscreen ? "Fullscreen transcript enabled." : "Fullscreen transcript disabled.",
++			);
++			return;
++		}
++		if (normalized !== "fullscreen" && normalized !== "default" && normalized !== "close") {
++			this.showError("Usage: /tui [fullscreen|default|status]");
++			return;
++		}
++		if (normalized === "default" || normalized === "close") {
++			this.#primaryTranscriptFullscreen?.close();
++			return;
++		}
++		if (this.#primaryTranscriptFullscreen) return;
++
++		let overlayHandle: OverlayHandle | undefined;
++		const component = new PrimaryTranscriptFullscreen({
++			ui: this.ui,
++			transcript: this.chatContainer,
++			editor: this.editor,
++			// Exactly the containers the normal tree stacks around the editor, in
++			// the same order (see the addChild block in setup): the fullscreen
++			// frame composes over an empty base and never renders the root, so
++			// anything missing here is off screen while the surface is up — the
++			// working loader, the todo and subagent HUDs, error banners, pending
++			// messages and the hook widgets included.
++			chromeAbove: [
++				this.pendingMessagesContainer,
++				this.todoContainer,
++				this.subagentContainer,
++				this.btwContainer,
++				this.omfgContainer,
++				this.errorBannerContainer,
++				this.modelCycleContainer,
++				this.deferredCommandContainer,
++				this.statusContainer,
++				this.statusLine,
++				this.hookWidgetContainerAbove,
++			],
++			chromeBelow: [this.hookWidgetContainerBelow],
++			onClose: () => {
++				component.dispose();
++				overlayHandle?.hide();
++				this.#primaryTranscriptFullscreen = undefined;
++				this.ui.setFocus(this.editor);
++				this.ui.requestRender();
++			},
++		});
++		this.#primaryTranscriptFullscreen = component;
++		overlayHandle = this.ui.showOverlay(component, {
++			anchor: "top-left",
++			width: "100%",
++			maxHeight: "100%",
++			margin: 0,
++			fullscreen: true,
++			mouseTracking: true,
++			cursor: true,
++		});
++		this.ui.setFocus(this.editor);
++		this.ui.requestRender();
++	}
++
+ 	showStatus(message: string, options?: { dim?: boolean }): void {
+ 		this.#uiHelpers.showStatus(message, options);
+ 	}
+diff --git a/packages/coding-agent/src/modes/types.ts b/packages/coding-agent/src/modes/types.ts
+index 0fb879efe3..1ca2505ad8 100644
+--- a/packages/coding-agent/src/modes/types.ts
++++ b/packages/coding-agent/src/modes/types.ts
+@@ -266,6 +266,7 @@ export interface InteractiveModeContext {
+ 	 * leak.
+ 	 */
+ 	resetTranscript(): void;
++	setPrimaryTranscriptFullscreen(mode: string): void;
+ 	showStatus(message: string, options?: { dim?: boolean }): void;
+ 	showModelCycleTrack(track: string): void;
+ 	showError(message: string): void;
+diff --git a/packages/coding-agent/src/slash-commands/builtin-control.ts b/packages/coding-agent/src/slash-commands/builtin-control.ts
+index d1de711505..8c6c48c714 100644
+--- a/packages/coding-agent/src/slash-commands/builtin-control.ts
++++ b/packages/coding-agent/src/slash-commands/builtin-control.ts
+@@ -4,6 +4,20 @@ import { commandConsumed, errorMessage, usage } from "./helpers/parse";
+ import type { SlashCommandSpec } from "./types";
+ 
+ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
++	{
++		name: "tui",
++		description: "Switch the terminal UI renderer",
++		allowArgs: true,
++		subcommands: [
++			{ name: "fullscreen", description: "Open the live transcript in fullscreen mode" },
++			{ name: "default", description: "Return to the normal terminal renderer" },
++			{ name: "status", description: "Show the active terminal renderer" },
++		],
++		handleTui: (command, runtime) => {
++			runtime.ctx.editor.setText("");
++			runtime.ctx.setPrimaryTranscriptFullscreen(command.args);
++		},
++	},
+ 	{
+ 		name: "force",
+ 		description: "Force next turn to use a specific tool",
+diff --git a/packages/coding-agent/test/primary-transcript-fullscreen.test.ts b/packages/coding-agent/test/primary-transcript-fullscreen.test.ts
+new file mode 100644
+index 0000000000..3db673131f
+--- /dev/null
++++ b/packages/coding-agent/test/primary-transcript-fullscreen.test.ts
+@@ -0,0 +1,364 @@
++import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
++import type { Component, TUI } from "@oh-my-pi/pi-tui";
++import { PrimaryTranscriptFullscreen } from "../src/modes/components/primary-transcript-fullscreen";
++import { TranscriptContainer } from "../src/modes/components/transcript-container";
++import { UserMessageComponent } from "../src/modes/components/user-message";
++import { initTheme } from "../src/modes/theme/theme";
++import type { InteractiveModeContext } from "../src/modes/types";
++import { executeBuiltinSlashCommand } from "../src/slash-commands/builtin-registry";
++
++beforeAll(async () => {
++	await initTheme(false);
++});
++
++afterEach(() => {
++	vi.restoreAllMocks();
++});
++
++interface FakeEditor {
++	getText(): string;
++	render(width: number): readonly string[];
++	setText(text: string): void;
++}
++
++function createEditor(text: string): FakeEditor {
++	return {
++		getText: () => text,
++		render: () => [text],
++		setText: value => {
++			text = value;
++		},
++	};
++}
++
++/** Transcript block with directly controllable rows, standing in for a streamed body. */
++class Rows implements Component {
++	#lines: readonly string[];
++
++	constructor(lines: readonly string[]) {
++		this.#lines = lines;
++	}
++
++	setLines(lines: readonly string[]): void {
++		this.#lines = lines;
++	}
++
++	invalidate(): void {}
++
++	render(): readonly string[] {
++		return this.#lines;
++	}
++}
++
++function filler(prefix: string, count: number): Rows {
++	return new Rows(Array.from({ length: count }, (_, index) => `${prefix}-${index + 1}`));
++}
++
++type InputListener = (data: string) => { consume?: boolean } | undefined;
++
++function createFakeUi(rows: number): { ui: TUI; send: InputListener; bursts: () => number } {
++	const listeners: InputListener[] = [];
++	let bursts = 0;
++	const fake = {
++		terminal: { rows, columns: 50 },
++		addInputListener(listener: InputListener): () => void {
++			listeners.push(listener);
++			return () => {
++				const index = listeners.indexOf(listener);
++				if (index >= 0) listeners.splice(index, 1);
++			};
++		},
++		requestRender(): void {},
++		beginRenderBurst(): void {
++			bursts++;
++		},
++	};
++	return { ui: fake as unknown as TUI, send: data => listeners[0]?.(data), bursts: () => bursts };
++}
++
++/** Row of a rendered frame with styling and the scrollbar column removed. */
++function row(lines: readonly string[], index: number): string {
++	return Bun.stripANSI(lines[index] ?? "")
++		.replace(/[│█]$/, "")
++		.trimEnd();
++}
++
++const WHEEL_UP = "\x1b[<64;1;1M";
++const PAGE_UP = "\x1b[5~";
++const CTRL_END = "\x1b[1;5F";
++const SHIFT_PAGE_UP = "\x1b[5;2~";
++
++function clickRow(index: number): string {
++	return `\x1b[<0;1;${index + 1}M`;
++}
++
++describe("PrimaryTranscriptFullscreen", () => {
++	it("keeps the editor and footer below a transcript that follows the tail", () => {
++		const fakeUi = createFakeUi(8);
++		const transcript = new TranscriptContainer();
++		transcript.addChild(filler("body", 12));
++		const component = new PrimaryTranscriptFullscreen({
++			ui: fakeUi.ui,
++			transcript,
++			editor: createEditor("draft"),
++			chromeAbove: [],
++			chromeBelow: [],
++			onClose: () => {},
++		});
++		const lines = [...component.render(120)];
++
++		expect(lines).toHaveLength(8);
++		expect(row(lines, 6)).toBe("draft");
++		expect(row(lines, 7)).toContain("PgUp/PgDn");
++		// The header row is reserved on every frame, following or paused, so it
++		// costs the viewport one row even here: the newest content row is on
++		// screen, the oldest is not.
++		expect(row(lines, 0)).toContain("início da conversa");
++		expect(row(lines, 5)).toContain("body-12");
++		expect(row(lines, 1)).toContain("body-8");
++		component.dispose();
++	});
++
++	it("names the on-screen section in the sticky header at all times, and snaps a scrolled section back to the top on click", () => {
++		const fakeUi = createFakeUi(12);
++		const transcript = new TranscriptContainer();
++		transcript.addChild(new UserMessageComponent("primeira pergunta", false));
++		transcript.addChild(filler("resposta-a", 20));
++		transcript.addChild(new UserMessageComponent("segunda pergunta\n\ncom detalhe ignorado", false));
++		transcript.addChild(filler("resposta-b", 20));
++		const component = new PrimaryTranscriptFullscreen({
++			ui: fakeUi.ui,
++			transcript,
++			editor: createEditor(""),
++			chromeAbove: [],
++			chromeBelow: [],
++			onClose: () => {},
++		});
++		// The header is reserved on every frame, following or paused, so it
++		// already names the section under the tail before the reader scrolls.
++		expect(component.render(120).join("\n")).toContain("↳ segunda pergunta");
++
++		// Jump to the prompt that owns the tail: it lands exactly at the viewport
++		// top, so the header names that prompt itself (a prompt at the boundary
++		// row owns the header, matching the anchor's own inclusive boundary) and
++		// previews only its first paragraph.
++		expect(fakeUi.send(SHIFT_PAGE_UP)?.consume).toBe(true);
++		const atSecond = [...component.render(120)];
++		expect(row(atSecond, 0)).toContain("segunda pergunta");
++		expect(row(atSecond, 0)).not.toContain("com detalhe ignorado");
++		expect(row(atSecond, 1)).toContain("segunda pergunta");
++
++		// Clicking the header re-snaps the same prompt: idempotent while it is
++		// already the one named, and still routed through the mouse handler.
++		expect(fakeUi.send(clickRow(0))?.consume).toBe(true);
++		const snapped = [...component.render(120)];
++		expect(row(snapped, 1)).toContain("segunda pergunta");
++		component.dispose();
++	});
++
++	it("holds the reader's position when a block above the viewport grows", () => {
++		const fakeUi = createFakeUi(12);
++		const transcript = new TranscriptContainer();
++		transcript.addChild(new UserMessageComponent("pergunta", false));
++		const growing = filler("stream", 10);
++		transcript.addChild(growing);
++		transcript.addChild(new UserMessageComponent("pergunta seguinte", false));
++		transcript.addChild(filler("depois", 20));
++		const component = new PrimaryTranscriptFullscreen({
++			ui: fakeUi.ui,
++			transcript,
++			editor: createEditor(""),
++			chromeAbove: [],
++			chromeBelow: [],
++			onClose: () => {},
++		});
++		component.render(120);
++		fakeUi.send(SHIFT_PAGE_UP);
++		const before = [...component.render(120)];
++		expect(row(before, 1)).toContain("pergunta seguinte");
++		const promptRowBefore = transcript.getPromptAnchors().at(-1)?.row;
++
++		growing.setLines(Array.from({ length: 40 }, (_, index) => `stream-${index + 1}`));
++		transcript.invalidate();
++		const after = [...component.render(120)];
++
++		expect(transcript.getPromptAnchors().at(-1)?.row).toBe(promptRowBefore! + 30);
++		// Absolute line offsets moved by 30 rows; the anchored viewport did not.
++		expect(row(after, 1)).toBe(row(before, 1));
++		expect(row(after, 2)).toBe(row(before, 2));
++		component.dispose();
++	});
++
++	it("pages by half a screen and resumes following at the bottom", () => {
++		const fakeUi = createFakeUi(14);
++		const transcript = new TranscriptContainer();
++		transcript.addChild(filler("linha", 60));
++		const component = new PrimaryTranscriptFullscreen({
++			ui: fakeUi.ui,
++			transcript,
++			editor: createEditor(""),
++			chromeAbove: [],
++			chromeBelow: [],
++			onClose: () => {},
++		});
++		// 14 rows − 1 header − 1 editor − 1 footer = 11 of viewport (the header is
++		// reserved in every state now); the tail shows linha-50..60.
++		expect(row([...component.render(120)], 1)).toBe("linha-50");
++
++		// Half of the 11-row viewport, floored, is 5.
++		expect(fakeUi.send(PAGE_UP)?.consume).toBe(true);
++		expect(row([...component.render(120)], 1)).toBe("linha-45");
++
++		expect(fakeUi.send(CTRL_END)?.consume).toBe(true);
++		const followed = [...component.render(120)];
++		expect(row(followed, 1)).toBe("linha-50");
++		expect(row(followed, 13)).toContain("seguindo o fim");
++		component.dispose();
++	});
++
++	it("leaves plain keys to the editor and offers a jump-to-bottom footer", () => {
++		const fakeUi = createFakeUi(10);
++		const transcript = new TranscriptContainer();
++		transcript.addChild(filler("linha", 60));
++		const component = new PrimaryTranscriptFullscreen({
++			ui: fakeUi.ui,
++			transcript,
++			editor: createEditor(""),
++			chromeAbove: [],
++			chromeBelow: [],
++			onClose: () => {},
++		});
++		component.render(120);
++
++		// Bare letters and arrows are text and prompt history: they must reach the editor.
++		expect(fakeUi.send("g")).toBeUndefined();
++		expect(fakeUi.send("\x1b[A")).toBeUndefined();
++		expect(fakeUi.send("\x1b[B")).toBeUndefined();
++
++		expect(fakeUi.send(WHEEL_UP)?.consume).toBe(true);
++		expect(row([...component.render(120)], 9)).toContain("clique para ir ao fim");
++
++		// The footer doubles as the jump-to-bottom button.
++		expect(fakeUi.send(clickRow(9))?.consume).toBe(true);
++		const followed = [...component.render(120)];
++		expect(row(followed, 7)).toBe("linha-60");
++		expect(row(followed, 9)).toContain("seguindo o fim");
++		component.dispose();
++	});
++
++	it("preserves Ghostty's native wheel burst distance and direction", () => {
++		const fakeUi = createFakeUi(30);
++		const transcript = new TranscriptContainer();
++		transcript.addChild(filler("linha", 400));
++		const component = new PrimaryTranscriptFullscreen({
++			ui: fakeUi.ui,
++			transcript,
++			editor: createEditor(""),
++			chromeAbove: [],
++			chromeBelow: [],
++			onClose: () => {},
++		});
++		component.render(120);
++
++		const lineNumber = () => Number(row([...component.render(120)], 1).replace("linha-", ""));
++		const before = lineNumber();
++		for (let index = 0; index < 8; index++) fakeUi.send(WHEEL_UP);
++		const afterBurst = lineNumber();
++		fakeUi.send("\x1b[<65;1;1M");
++		const afterDown = lineNumber();
++
++		expect(before - afterBurst).toBe(8 * 3);
++		expect(afterDown - afterBurst).toBe(3);
++		// Every report opens a display-rate render window; at the idle 30fps
++		// cadence the burst would land as one jump instead of nine steps.
++		expect(fakeUi.bursts()).toBe(9);
++		expect(row([...component.render(120)], 29)).toContain("clique para ir ao fim");
++		component.dispose();
++	});
++
++	it("renders chromeAbove between the transcript and the editor, and chromeBelow after the editor", () => {
++		const fakeUi = createFakeUi(10);
++		const transcript = new TranscriptContainer();
++		transcript.addChild(filler("body", 3));
++		const component = new PrimaryTranscriptFullscreen({
++			ui: fakeUi.ui,
++			transcript,
++			editor: createEditor("draft"),
++			chromeAbove: [new Rows(["CHROME-ABOVE"])],
++			chromeBelow: [new Rows(["CHROME-BELOW"])],
++			onClose: () => {},
++		});
++		const lines = [...component.render(120)];
++
++		const aboveIndex = lines.findIndex(line => line.includes("CHROME-ABOVE"));
++		const editorIndex = lines.indexOf("draft");
++		const belowIndex = lines.findIndex(line => line.includes("CHROME-BELOW"));
++		expect(aboveIndex).toBeGreaterThanOrEqual(0);
++		expect(editorIndex).toBeGreaterThan(aboveIndex);
++		expect(belowIndex).toBeGreaterThan(editorIndex);
++		component.dispose();
++	});
++
++	it("keeps the editor pinned to the same screen row across frames while only the transcript grows (no streaming jitter)", () => {
++		const fakeUi = createFakeUi(10);
++		const transcript = new TranscriptContainer();
++		const growing = filler("stream", 3);
++		transcript.addChild(growing);
++		const component = new PrimaryTranscriptFullscreen({
++			ui: fakeUi.ui,
++			transcript,
++			editor: createEditor("draft"),
++			chromeAbove: [],
++			chromeBelow: [],
++			onClose: () => {},
++		});
++		const before = [...component.render(120)];
++		const editorRowBefore = before.indexOf("draft");
++		expect(editorRowBefore).toBeGreaterThanOrEqual(0);
++
++		growing.setLines(Array.from({ length: 40 }, (_, index) => `stream-${index + 1}`));
++		transcript.invalidate();
++		const after = [...component.render(120)];
++		const editorRowAfter = after.indexOf("draft");
++
++		expect(editorRowAfter).toBe(editorRowBefore);
++		component.dispose();
++	});
++});
++
++describe("TranscriptContainer.getPromptAnchors", () => {
++	it("anchors at the first visible text row of the prompt bubble, not its painted top padding", () => {
++		const transcript = new TranscriptContainer();
++		transcript.addChild(new UserMessageComponent("qual é a resposta?", false));
++		const frame = transcript.render(80);
++		const anchors = transcript.getPromptAnchors();
++
++		expect(anchors).toHaveLength(1);
++		const anchorRow = anchors[0]!.row;
++		const anchorLine = Bun.stripANSI(frame[anchorRow] ?? "");
++		expect(anchorLine).toContain("qual é a resposta?");
++
++		// The bubble genuinely paints a background row above the text — confirms
++		// the anchor actually skipped it rather than the bubble having no padding
++		// to skip in the first place.
++		expect(anchorRow).toBeGreaterThan(0);
++		expect(Bun.stripANSI(frame[anchorRow - 1] ?? "").trim()).toBe("");
++	});
++});
++
++describe("/tui fullscreen", () => {
++	it("routes fullscreen and default to the interactive context", async () => {
++		const editor = createEditor("/tui fullscreen");
++		const modes: string[] = [];
++		const context = {
++			editor,
++			collabGuest: undefined,
++			setPrimaryTranscriptFullscreen: (mode: string) => modes.push(mode),
++		} as unknown as InteractiveModeContext;
++
++		expect(await executeBuiltinSlashCommand("/tui fullscreen", { ctx: context })).toBe(true);
++		expect(await executeBuiltinSlashCommand("/tui default", { ctx: context })).toBe(true);
++		expect(modes).toEqual(["fullscreen", "default"]);
++		expect(editor.getText()).toBe("");
++	});
++});
+diff --git a/packages/tui/CHANGELOG.md b/packages/tui/CHANGELOG.md
+index bcede4cde6..8efc1fb78a 100644
+--- a/packages/tui/CHANGELOG.md
++++ b/packages/tui/CHANGELOG.md
+@@ -2,6 +2,16 @@
+ 
+ ## [Unreleased]
+ 
++### Added
++
++- Fullscreen overlays can opt into a live hardware cursor (`cursor: true` in `OverlayOptions`), so an alternate-screen surface that hosts a text editor shows a real caret instead of the engine keeping it hidden for the whole overlay lifetime.
++- `TUI.beginRenderBurst()`: while a pointer gesture is in flight the render cadence floor drops from 30 fps to 120 fps for 150 ms, so a scroll surface can paint one frame per native wheel report instead of coalescing the burst into a few large jumps. Adaptive backpressure and the ConPTY settle window still bound the actual rate, so an expensive frame throttles itself back down.
++
++### Fixed
++
++- Fixed alternate-screen overlays rewriting every row on every frame. The alt path now emits a per-line diff, so a live fullscreen surface stops flooding the terminal: over an identical streaming run the same content went from 142 KB to 79 KB and from 35 full-screen repaints to 0. Forced repaints (`resetDisplay()`, `requestRender(true)`) still paint in full, and image rows are always re-emitted because their placement bytes depend on epoch/geometry state that the line text does not capture.
++- Fixed the shell prompt landing on top of the transcript when the process exits while a cursor-enabled fullscreen overlay is still open: `stop()` tore down the alt buffer without restoring `#hardwareCursorRow`, leaving it holding an absolute alt-screen row while the teardown math reads it as a frame row.
++
+ ## [17.2.13] - 2026-08-11
+ 
+ ### Fixed
+diff --git a/packages/tui/src/tui.ts b/packages/tui/src/tui.ts
+index 0f5540338d..7f86dfe7b7 100644
+--- a/packages/tui/src/tui.ts
++++ b/packages/tui/src/tui.ts
+@@ -469,6 +469,12 @@ export interface OverlayOptions {
+ 	 * when native terminal text selection takes precedence over pointer events.
+ 	 */
+ 	mouseTracking?: boolean;
++	/**
++	 * Show the terminal's hardware cursor while this fullscreen overlay is up,
++	 * positioned at the focused component's CURSOR_MARKER. Defaults off: modals
++	 * paint their own in-band caret. Only meaningful with `fullscreen: true`.
++	 */
++	cursor?: boolean;
+ }
+ 
+ /**
+@@ -948,6 +954,17 @@ export class TUI extends Container {
+ 	 * feels dead to the user and no longer justifies further CPU savings.
+ 	 */
+ 	static readonly #MAX_ADAPTIVE_RENDER_MS = 200;
++	/**
++	 * Cadence floor while a pointer gesture is in flight (see
++	 * {@link TUI.beginRenderBurst}) and how long that window lasts after the
++	 * last gesture event. 120 fps matches the fastest display refresh a
++	 * terminal presents at, so the consumer stops being the sampling
++	 * bottleneck; the window is short enough that an idle UI is back on the
++	 * 30 fps cadence one frame after the gesture stops.
++	 */
++	static readonly #RENDER_BURST_INTERVAL_MS = 1000 / 120;
++	static readonly #RENDER_BURST_WINDOW_MS = 150;
++	#renderBurstUntilMs = 0;
+ 	#inputRenderGraceUntilMs = 0;
+ 	// Pane-reflow settle window for tmux/screen/zellij. The host process gets
+ 	// SIGWINCH (and `process.stdout` already reports the new geometry) before
+@@ -1118,12 +1135,22 @@ export class TUI extends Container {
+ 	// engine paints only the modal on the alt buffer and leaves every
+ 	// normal-screen accounting field (#previousFrameLength, #viewportTopRow, …)
+ 	// untouched, so exiting reconciles cleanly against the terminal-restored
+-	// normal screen. #altPreviousLines is the last alt frame, for repaint-skip.
++	// normal screen. #altPreviousLines is the last alt frame, the base for the
++	// per-row diff (and the repaint-skip).
+ 	#altActive = false;
+ 	#altMouseTrackingActive = false;
+ 	#altPreviousLines: string[] = [];
+ 	#altEnterWidth = 0;
+ 	#altEnterHeight = 0;
++	// The normal screen's tracked hardware cursor row at the moment we borrowed
++	// the alt buffer. `\x1b[?1049h`/`l` save and restore the terminal's cursor
++	// around the switch, so the tracker has to revert with it: a `cursor: true`
++	// overlay retargets it to an absolute alt-screen row, and the first paint
++	// back on the normal screen positions relative to #hardwareCursorRow
++	// (#emitUpdate and requestDirectWrite both derive their screen row from
++	// `#hardwareCursorRow - windowTop`). Left pointing at an alt row, that paint
++	// starts from the wrong origin and rewrites the wrong rows.
++	#altEnterHardwareCursorRow = 0;
+ 	// Holds an alternate-screen exit until its replacement full paint can emit it
+ 	// atomically. It must survive a deferred Ghostty image frame.
+ 	#pendingAltExit = "";
+@@ -1834,6 +1861,16 @@ export class TUI extends Container {
+ 			const exitSequence = this.#pendingAltExit || `${mouseExit}${this.#keyboardEnhancementExit()}\x1b[?1049l`;
+ 			this.terminal.write(exitSequence);
+ 			setAltScreenActive(false);
++			// `\x1b[?1049l` restores the cursor the terminal saved on entry, so
++			// the tracker must revert with it — the same revert the #doRender
++			// exit performs. A `cursor: true` overlay leaves an ABSOLUTE
++			// alt-screen row in this field, and the teardown math below consumes
++			// it as a normal-screen frame row: left alone, the parent shell's
++			// prompt lands on top of the transcript. The deferred-exit branch
++			// already reverted at decision time, and re-asserting is still
++			// correct there — the normal-screen frames that ran while the exit
++			// was pending painted onto the alt buffer, which this exit discards.
++			this.#hardwareCursorRow = this.#altEnterHardwareCursorRow;
+ 			this.#altActive = false;
+ 			this.#altMouseTrackingActive = false;
+ 			this.#altPreviousLines = [];
+@@ -1959,6 +1996,23 @@ export class TUI extends Container {
+ 		this.#requestOrdinaryRender();
+ 	}
+ 
++	/**
++	 * Declare that a continuous pointer gesture is in flight, so the next
++	 * ~{@link TUI.#RENDER_BURST_WINDOW_MS} of paints may run at display rate
++	 * instead of the 30 fps idle cadence.
++	 *
++	 * A scroll gesture is the one case where the cadence *is* the feature: the
++	 * terminal moves its own viewport once per native wheel report (Ghostty
++	 * emits a burst of them per physical notch), so a 30 fps consumer collapses
++	 * that burst into ~9-row jumps while the terminal itself steps 3 rows at a
++	 * time. Callers invoke this once per gesture event, right before requesting
++	 * the render it produced; adaptive backpressure still applies, so an
++	 * expensive frame throttles itself back down.
++	 */
++	beginRenderBurst(): void {
++		this.#renderBurstUntilMs = this.#renderScheduler.now() + TUI.#RENDER_BURST_WINDOW_MS;
++	}
++
+ 	/**
+ 	 * Opt `component` into subtree-only renders when input leaves focus stable.
+ 	 *
+@@ -2376,7 +2430,10 @@ export class TUI extends Container {
+ 		}
+ 		const now = this.#renderScheduler.now();
+ 		const elapsed = now - this.#lastRenderAt;
+-		const cadenceDelay = Math.max(0, TUI.#MIN_RENDER_INTERVAL_MS - elapsed);
++		// A pointer gesture asks for display-rate sampling; everything else
++		// stays on the idle cadence. Backpressure below still governs cost.
++		const cadenceFloor = now < this.#renderBurstUntilMs ? TUI.#RENDER_BURST_INTERVAL_MS : TUI.#MIN_RENDER_INTERVAL_MS;
++		const cadenceDelay = Math.max(0, cadenceFloor - elapsed);
+ 		// Adaptive backpressure — target ~50% render duty cycle: the next frame
+ 		// starts no sooner than `last_frame_end + last_frame_cost`, i.e.
+ 		// `last_frame_start + 2 × last_frame_cost`. So `elapsed` (which counts
+@@ -2868,6 +2925,7 @@ export class TUI extends Container {
+ 		const topOverlay = this.#getTopmostVisibleOverlay();
+ 		const wantAlt = topOverlay?.options?.fullscreen === true;
+ 		const wantMouseTracking = wantAlt && topOverlay.options?.mouseTracking !== false;
++		const wantCursor = wantAlt && topOverlay.options?.cursor === true;
+ 		if (wantAlt && !this.#altActive) {
+ 			// Enhanced keyboard modes can be buffer-local: re-push the active
+ 			// modified-key reporting sequence on the freshly entered alternate
+@@ -2884,10 +2942,16 @@ export class TUI extends Container {
+ 			this.#altPreviousLines = [];
+ 			this.#altEnterWidth = width;
+ 			this.#altEnterHeight = height;
++			this.#altEnterHardwareCursorRow = this.#hardwareCursorRow;
+ 		} else if (!wantAlt && this.#altActive) {
+ 			const mouseExit = this.#altMouseTrackingActive ? MOUSE_TRACKING_OFF : "";
+ 			const enhancementExit = this.#keyboardEnhancementExit();
+-			const exitSequence = `${mouseExit}${enhancementExit}\x1b[?1049l`;
++			// A `cursor: true` overlay leaves the hardware cursor visible, and
++			// DECTCEM is not part of what `\x1b[?1049l` restores. Hide it before
++			// the switch — ahead of the keyboard pop, which must stay adjacent to
++			// the buffer exit — or it survives onto the normal screen.
++			const cursorExit = this.#hardwareCursorVisible ? HIDE_CURSOR : "";
++			const exitSequence = `${cursorExit}${mouseExit}${enhancementExit}\x1b[?1049l`;
+ 			// Session replacement can finish while a fullscreen selector is still
+ 			// covering the old normal buffer. Keep the overlay visible until the
+ 			// replacement is ready, then fuse the buffer restore into that full paint;
+@@ -2897,6 +2961,10 @@ export class TUI extends Container {
+ 				deferredAltExit = exitSequence;
+ 			} else this.terminal.write(exitSequence);
+ 			setAltScreenActive(false);
++			// The terminal restores the cursor it saved on entry; restore our
++			// tracking of it too, or a `cursor: true` overlay's absolute alt row
++			// misaligns the first normal-screen paint.
++			this.#hardwareCursorRow = this.#altEnterHardwareCursorRow;
+ 			this.#forgetHardwareCursorState();
+ 			this.#altActive = false;
+ 			this.#altMouseTrackingActive = false;
+@@ -2919,7 +2987,7 @@ export class TUI extends Container {
+ 		}
+ 		if (this.#altActive) {
+ 			this.#componentRenderTargets.clear();
+-			this.#renderAltFrame(width, height);
++			this.#renderAltFrame(width, height, wantCursor);
+ 			return;
+ 		}
+ 
+@@ -4005,25 +4073,45 @@ export class TUI extends Container {
+ 
+ 	/**
+ 	 * Compose and paint a single fullscreen overlay frame on the alt buffer.
+-	 * Cursor markers are stripped (the modal draws its own in-band caret and
+-	 * keeps the hardware cursor hidden), and only the modal is composited over a
+-	 * blank base — the transcript is never touched while the alt buffer is up.
++	 * Only the modal is composited over a blank base — the transcript is never
++	 * touched while the alt buffer is up. Cursor markers are stripped from the
++	 * text either way (they are internal sentinels); `showCursor` — the
++	 * overlay's `cursor: true` — decides whether the bottom-most one also drives
++	 * the hardware cursor, or whether it stays hidden because the modal paints
++	 * its own in-band caret.
+ 	 */
+-	#renderAltFrame(width: number, height: number): void {
++	#renderAltFrame(width: number, height: number, showCursor: boolean): void {
+ 		const base: string[] = new Array(Math.max(0, height)).fill("");
+ 		let lines = this.#compositeOverlaysIntoWindow(base, width, height);
+-		this.#extractCursorMarkers(lines);
++		const markers = this.#extractCursorMarkers(lines);
+ 		lines = this.#prepareLinesArray(lines, width);
+-		this.#emitAltFrame(lines, width, height);
++		this.#emitAltFrame(lines, width, height, showCursor ? (markers[0] ?? null) : null);
+ 	}
+ 
+ 	/**
+-	 * Full per-row viewport rewrite on the alt buffer. Emits only sync-output
+-	 * brackets, a cursor home, and per-row rewrites — never ED3, append-tail, or
+-	 * any native-scrollback byte, so it is fully isolated from the planner and
+-	 * #commit. The hardware cursor stays hidden (it is never re-shown here).
++	 * Paint one alt-buffer frame as a per-row diff against the previous one.
++	 * Emits only sync-output brackets, absolute row positioning and per-row
++	 * rewrites — never ED3, append-tail, or any native-scrollback byte — so it
++	 * stays fully isolated from the planner and #commit.
++	 *
++	 * Every row is rewritten only when the cached frame cannot describe what is
++	 * on screen: a forced repaint (resetDisplay, requestRender(true)) must
++	 * repair a corrupted modal even when our cache is byte-identical, and a
++	 * row-count mismatch means rows we never painted (the first frame after
++	 * entering the alt buffer, or a height change). Otherwise only the rows
++	 * whose text changed are rewritten — a streaming transcript touches a
++	 * handful per frame, so a 30fps stream stops rewriting the whole screen 30
++	 * times a second.
++	 *
++	 * Trade-off: rewriting every row per frame used to heal damage this
++	 * renderer never caused (a stray write from a child process, a terminal
++	 * glitch), because the cache was never consulted. The diff trusts
++	 * #altPreviousLines, so out-of-band damage now survives until a repaint is
++	 * forced — `resetDisplay()` (Ctrl+L), `requestRender(true)`, or anything
++	 * else that sets #forceViewportRepaintOnNextRender, all of which reach the
++	 * `force` branch below and rewrite the whole screen.
+ 	 */
+-	#emitAltFrame(lines: string[], width: number, height: number): void {
++	#emitAltFrame(lines: string[], width: number, height: number, cursorPos: { row: number; col: number } | null): void {
+ 		const fitted: string[] = new Array(height);
+ 		for (let r = 0; r < height; r++) fitted[r] = lines[r] ?? "";
+ 		// Flush queued image-data transmits (`a=t`, no visible output) before the
+@@ -4038,31 +4126,114 @@ export class TUI extends Container {
+ 			for (const seq of imageTransmits) transmitBuffer += seq;
+ 			this.terminal.write(transmitBuffer);
+ 		}
+-		// Skip an identical repaint (the modal is mostly static between
+-		// keystrokes) — unless a forced repaint (resetDisplay,
+-		// requestRender(true)) is pending: the redraw gesture must repair a
+-		// corrupted modal even when our cached frame is byte-identical.
+ 		const force = this.#forceViewportRepaintOnNextRender;
+ 		this.#forceViewportRepaintOnNextRender = false;
+-		if (!force && this.#altPreviousLines.length === height) {
+-			let same = true;
++		const previous = this.#altPreviousLines;
++		const fullRepaint = force || previous.length !== height;
++		// A null target keeps the cursor hidden: the overlay never asked for one,
++		// nothing published a marker, or hardware cursors are off app-wide and the
++		// focused component paints an in-band caret instead.
++		const target = this.#showHardwareCursor ? this.#targetHardwareCursorState(cursorPos, height) : null;
++		if (!fullRepaint) {
++			let changed = false;
+ 			for (let r = 0; r < height; r++) {
+-				if (fitted[r] !== this.#altPreviousLines[r]) {
+-					same = false;
++				if (this.#altRowChanged(fitted[r], previous[r])) {
++					changed = true;
+ 					break;
+ 				}
+ 			}
+-			if (same) return;
++			// The modal is mostly static between keystrokes, and a caret walking
++			// along an unchanged line moves nothing but the cursor.
++			if (!changed) {
++				this.#writeAltCursorPosition(target);
++				return;
++			}
+ 		}
+-		let buffer = `${this.#paintBeginSequence}\x1b[H`;
+-		for (let r = 0; r < height; r++) {
+-			if (r > 0) buffer += "\r\n";
+-			buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1);
++		let buffer = this.#paintBeginSequence;
++		if (fullRepaint) {
++			buffer += "\x1b[H";
++			for (let r = 0; r < height; r++) {
++				if (r > 0) buffer += "\r\n";
++				buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1);
++			}
++			this.#fullRedrawCount += 1;
++		} else {
++			// One absolute jump per run of contiguous changed rows, then CRLF
++			// between that run's rows: rewrites always resume at column 1, so the
++			// jump would only repeat what the CRLF already did.
++			let r = 0;
++			while (r < height) {
++				if (!this.#altRowChanged(fitted[r], previous[r])) {
++					r++;
++					continue;
++				}
++				buffer += `\x1b[${r + 1};1H`;
++				let first = true;
++				while (r < height && this.#altRowChanged(fitted[r], previous[r])) {
++					if (!first) buffer += "\r\n";
++					buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1);
++					first = false;
++					r++;
++				}
++			}
+ 		}
++		// Inside the paint's own synchronized block: a standalone cursor frame
++		// would flicker between the content and the caret.
++		buffer += this.#altCursorSequence(target);
+ 		buffer += this.#paintEndSequence;
+ 		this.terminal.write(buffer);
+ 		this.#altPreviousLines = fitted;
+-		this.#fullRedrawCount += 1;
++		if (target) this.#recordHardwareCursorState(target);
++		else this.#recordHardwareCursorHidden();
++	}
++
++	/**
++	 * Whether an alt-buffer row has to be rewritten this frame. Text equality
++	 * decides for ordinary rows, but an image row's bytes are not a function of
++	 * its text: #prepareLine passes image lines through verbatim, while
++	 * #lineRewriteSequence resolves them against live placement state — the
++	 * epoch that names the placement id, the registered pixel geometry — and
++	 * the screen row. Repeated text can therefore still owe the terminal new
++	 * placement bytes, and skipping the row strands the image on whatever the
++	 * last emitted placement said until the next full repaint. Re-emitting is
++	 * exactly what the pre-diff whole-screen rewrite did for these rows.
++	 *
++	 * Equal text is the same string, so one check covers both sides; a row that
++	 * gains or loses an image differs textually and is caught by the compare.
++	 */
++	#altRowChanged(line: string, previous: string): boolean {
++		return line !== previous || TERMINAL.isImageLine(line);
++	}
++
++	/**
++	 * Cursor bytes for an alt frame. The alt buffer is a fixed screen with no
++	 * windowTop, so this positions absolutely rather than reusing
++	 * #cursorControlSequence, whose relative moves are anchored to the normal
++	 * screen's tracked row. Painting content leaves the cursor wherever the last
++	 * rewritten row ended (and #paintBeginSequence hides it), so a visible
++	 * target is always re-positioned; only the hide is deduplicated.
++	 */
++	#altCursorSequence(target: HardwareCursorState | null): string {
++		if (target) return `\x1b[${target.row + 1};${target.col + 1}H\x1b[?25h`;
++		return this.#isHiddenCursorKnown() ? "" : HIDE_CURSOR;
++	}
++
++	/**
++	 * Move the alt-screen hardware cursor on a frame that paints no content, as
++	 * #writeCursorPosition does for the normal screen. Nothing else writes to
++	 * the alt buffer, so the tracked state is exactly where the cursor sits and
++	 * an unchanged target emits no bytes at all.
++	 */
++	#writeAltCursorPosition(target: HardwareCursorState | null): void {
++		if (!target) {
++			if (this.#isHiddenCursorKnown()) return;
++			this.terminal.hideCursor();
++			this.#recordHardwareCursorHidden();
++			return;
++		}
++		if (this.#sameHardwareCursorState(target)) return;
++		this.terminal.write(`${this.#cursorBeginSequence}${this.#altCursorSequence(target)}${this.#cursorEndSequence}`);
++		this.#recordHardwareCursorState(target);
+ 	}
+ 
+ 	/**
+diff --git a/packages/tui/test/adaptive-render-backpressure.test.ts b/packages/tui/test/adaptive-render-backpressure.test.ts
+index 72b7f1ab96..0d82218e31 100644
+--- a/packages/tui/test/adaptive-render-backpressure.test.ts
++++ b/packages/tui/test/adaptive-render-backpressure.test.ts
+@@ -23,6 +23,8 @@ import { VirtualTerminal } from "./virtual-terminal";
+ 
+ const MIN_RENDER_INTERVAL_MS = 1000 / 30;
+ const MAX_ADAPTIVE_RENDER_MS = 200;
++const RENDER_BURST_INTERVAL_MS = 1000 / 120;
++const RENDER_BURST_WINDOW_MS = 150;
+ 
+ class ScriptedFrameCost implements Component {
+ 	#nextCostMs: number | null = null;
+@@ -173,3 +175,62 @@ describe("TUI adaptive render backpressure (#4145)", () => {
+ 		}
+ 	});
+ });
++
++// The same scheduling seam, from the opposite direction: a pointer gesture
++// asks for display-rate sampling because the terminal itself moves its
++// viewport once per native wheel report. At the idle 30 fps floor a scroll
++// burst collapses into a few large jumps; inside the burst window each report
++// gets its own frame, and the window lapses on its own.
++describe("TUI render burst cadence", () => {
++	it("samples at display rate inside a gesture window and returns to the idle cadence after it lapses", () => {
++		const term = new VirtualTerminal(20, 4);
++		const scheduler = new DeferredRenderScheduler();
++		const probe = new ScriptedFrameCost();
++		probe.scheduler = scheduler;
++		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
++		tui.addChild(probe);
++
++		try {
++			tui.start();
++			stepRender(scheduler);
++			scheduler.timers.length = 0;
++
++			probe.scheduleCost(1);
++			tui.requestRender();
++			const idleDelay = stepRender(scheduler);
++			expect(idleDelay).not.toBeNull();
++			expect(idleDelay!).toBeGreaterThan(RENDER_BURST_INTERVAL_MS);
++
++			// Each iteration consumes `delay + 1ms cost` of virtual time, so 25 of
++			// them span ~383ms and the 150ms window lapses mid-loop. Classify each
++			// frame by the clock reading the scheduler saw when it chose the delay.
++			const burstStartMs = scheduler.nowMs;
++			tui.beginRenderBurst();
++			const samples: Array<{ insideWindow: boolean; delayMs: number }> = [];
++			for (let index = 0; index < 25; index++) {
++				probe.scheduleCost(1);
++				const decidedAtMs = scheduler.nowMs;
++				tui.requestRender();
++				const delay = stepRender(scheduler);
++				expect(delay).not.toBeNull();
++				samples.push({ insideWindow: decidedAtMs - burstStartMs < RENDER_BURST_WINDOW_MS, delayMs: delay! });
++			}
++
++			// The window must actually lapse mid-loop, otherwise the assertions
++			// below would only cover one side of the transition.
++			const inside = samples.filter(sample => sample.insideWindow);
++			const outside = samples.filter(sample => !sample.insideWindow);
++			expect(inside.length).toBeGreaterThan(0);
++			expect(outside.length).toBeGreaterThan(0);
++			// Inside the gesture: display-rate sampling. After it: the idle floor,
++			// undisturbed by adaptive backpressure (frames cost 1ms here).
++			for (const sample of inside) expect(sample.delayMs).toBeLessThanOrEqual(RENDER_BURST_INTERVAL_MS);
++			for (const sample of outside) {
++				expect(sample.delayMs).toBeGreaterThan(RENDER_BURST_INTERVAL_MS);
++				expect(sample.delayMs).toBeLessThanOrEqual(MIN_RENDER_INTERVAL_MS);
++			}
++		} finally {
++			tui.stop();
++		}
++	});
++});
+diff --git a/packages/tui/test/alt-screen-live-surface.test.ts b/packages/tui/test/alt-screen-live-surface.test.ts
+new file mode 100644
+index 0000000000..68c04e00ae
+--- /dev/null
++++ b/packages/tui/test/alt-screen-live-surface.test.ts
+@@ -0,0 +1,628 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
++import { type Component, CURSOR_MARKER, type Focusable, TUI } from "@oh-my-pi/pi-tui";
++import { Image, type ImageBudget } from "@oh-my-pi/pi-tui/components/image";
++import { Text } from "@oh-my-pi/pi-tui/components/text";
++import { getKittyGraphics, setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graphics";
++import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
++import { VirtualTerminal } from "./virtual-terminal";
++
++type MutableTerminalInfo = { id: string; imageProtocol: ImageProtocol | null };
++/** Mutable view of the process-wide terminal-capabilities singleton, restored per test. */
++const terminal = TERMINAL as unknown as MutableTerminalInfo;
++const BASE64_ONE_PIXEL_PNG =
++	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
++
++function makeImage(budget: ImageBudget, key: string): Image {
++	return new Image(
++		BASE64_ONE_PIXEL_PNG,
++		"image/png",
++		{ fallbackColor: t => t },
++		{ maxWidthCells: 4, maxHeightCells: 4, budget, imageKey: key },
++	);
++}
++
++// Regression coverage for the fullscreen alt-screen surface (`/tui fullscreen`,
++// the plan/setup/transcript-viewer modals). Two bugs were reported together
++// ("cursor invisible" + "lines out of sync" while streaming) and traced to the
++// same code path: `#renderAltFrame`/`#emitAltFrame` rewrote every row of the
++// alt buffer whenever ANY row changed (a `#lineRewriteSequence` call per row
++// on every frame), and unconditionally discarded `#extractCursorMarkers`'
++// result, so the hardware cursor never came back after `hideCursor()` on
++// alt-screen entry. The fix adds a per-row diff against `#altPreviousLines`
++// (only changed rows are rewritten) and a `cursor?: boolean` opt-in on
++// `OverlayOptions` that positions and shows the hardware cursor at the
++// focused component's `CURSOR_MARKER`. These tests assert the two contracts
++// directly against the bytes the terminal receives and the screen content it
++// ends up with, so they fail if either regresses.
++
++class MutableLinesComponent implements Component {
++	#lines: string[];
++
++	constructor(lines: string[]) {
++		this.#lines = [...lines];
++	}
++
++	setLines(lines: string[]): void {
++		this.#lines = [...lines];
++	}
++
++	invalidate(): void {
++		// No cached state
++	}
++
++	render(width: number): string[] {
++		return this.#lines.map(line => line.slice(0, width));
++	}
++}
++
++// A focusable overlay that emits CURSOR_MARKER at a fixed row/col while
++// focused, and plain text otherwise — mirrors FocusedMutableOverlay in
++// overlay-scroll.test.ts but over multiple rows, so the marker's position
++// within the fullscreen window is unambiguous.
++class FocusedCursorLinesComponent implements Component, Focusable {
++	focused = false;
++	#lines: string[];
++	readonly #cursorRow: number;
++	readonly #cursorCol: number;
++
++	constructor(lines: string[], cursorRow: number, cursorCol: number) {
++		this.#lines = [...lines];
++		this.#cursorRow = cursorRow;
++		this.#cursorCol = cursorCol;
++	}
++
++	invalidate(): void {
++		// No cached state
++	}
++
++	render(_width: number): string[] {
++		return this.#lines.map((line, i) => {
++			if (i !== this.#cursorRow || !this.focused) return line;
++			return `${line.slice(0, this.#cursorCol)}${CURSOR_MARKER}${line.slice(this.#cursorCol)}`;
++		});
++	}
++}
++
++function rows(prefix: string, count: number): string[] {
++	return Array.from({ length: count }, (_v, i) => `${prefix}${i}`);
++}
++
++// Fills the terminal exactly (width/height match the overlay's line count and
++// column width), so `row`/`col` resolve to (0, 0) regardless of anchor — the
++// window under test is the whole alt screen, like `/tui fullscreen`.
++const FULLSCREEN_FILL = {
++	anchor: "bottom-center",
++	width: "100%",
++	maxHeight: "100%",
++	margin: 0,
++	fullscreen: true,
++} as const;
++
++async function settle(term: VirtualTerminal): Promise<void> {
++	// Integration test against TUI's real render scheduler (setImmediate hop
++	// then a throttled setTimeout(0) paint), not a fake-timer-friendly unit
++	// under test — there is no exposed "render finished" event to await
++	// instead, so draining both real macrotasks is the only deterministic
++	// signal that the throttled alt-frame paint has fired.
++	const immediate = Promise.withResolvers<void>();
++	setImmediate(immediate.resolve);
++	await immediate.promise;
++	await Bun.sleep(1);
++	await term.flush();
++}
++
++function captureWrites(term: VirtualTerminal): string[] {
++	const writes: string[] = [];
++	const realWrite = term.write.bind(term);
++	vi.spyOn(term, "write").mockImplementation((data: string) => {
++		writes.push(data);
++		realWrite(data);
++	});
++	return writes;
++}
++
++function visible(term: VirtualTerminal): string[] {
++	return term.getViewport().map(line => line.trimEnd());
++}
++
++describe("TUI fullscreen alt-screen live surface", () => {
++	// TUI throttles ordinary renders to ~30fps off `performance.now()`. The
++	// second paint in these tests lands microseconds after the first, so without
++	// a monotonic clock the throttle parks it past the settle window and the
++	// assertions read an unpainted screen. Same idiom as render-regressions.
++	let monotonicNow = 0;
++
++	beforeEach(() => {
++		monotonicNow = 0;
++		vi.spyOn(performance, "now").mockImplementation(() => {
++			monotonicNow += 40;
++			return monotonicNow;
++		});
++	});
++
++	afterEach(() => {
++		vi.restoreAllMocks();
++	});
++
++	it("repaints only the row that changed, not the whole alt screen (streaming jitter regression)", async () => {
++		const term = new VirtualTerminal(40, 6, 200);
++		const writes = captureWrites(term);
++		const tui = new TUI(term);
++		const overlay = new MutableLinesComponent(rows("row-", 6));
++		tui.showOverlay(overlay, FULLSCREEN_FILL);
++
++		try {
++			tui.start();
++			await settle(term);
++			expect(visible(term)).toEqual(rows("row-", 6));
++
++			const beforeUpdate = writes.length;
++			overlay.setLines(["row-0", "row-1", "row-2-UPDATED", "row-3", "row-4", "row-5"]);
++			tui.requestRender();
++			await settle(term);
++
++			const diffWrite = writes.slice(beforeUpdate).join("");
++			expect(diffWrite).toContain("row-2-UPDATED");
++			// Every row that did NOT change must not be retransmitted. The old
++			// #emitAltFrame rewrote all `height` rows the moment any single row
++			// differed — this is exactly what produced the reported "lines
++			// without harmony" flicker while the agent streamed tokens.
++			for (const untouchedRow of ["row-0", "row-1", "row-3", "row-4", "row-5"]) {
++				expect(diffWrite).not.toContain(untouchedRow);
++			}
++		} finally {
++			tui.stop();
++		}
++	});
++
++	it("keeps the rendered screen correct after a diffed update — identical to an equivalent full repaint", async () => {
++		const initialLines = rows("row-", 6);
++		const updatedLines = ["row-0", "row-1", "row-2-UPDATED", "row-3", "row-4", "row-5"];
++
++		const diffedTerm = new VirtualTerminal(40, 6, 200);
++		const diffedTui = new TUI(diffedTerm);
++		const overlay = new MutableLinesComponent(initialLines);
++		diffedTui.showOverlay(overlay, FULLSCREEN_FILL);
++		let diffedViewport: string[];
++		try {
++			diffedTui.start();
++			await settle(diffedTerm);
++			overlay.setLines(updatedLines);
++			diffedTui.requestRender();
++			await settle(diffedTerm);
++			diffedViewport = visible(diffedTerm);
++		} finally {
++			diffedTui.stop();
++		}
++
++		// Independent TUI/terminal pair that paints the post-update content as
++		// its very first (necessarily full) alt frame — the diff path must land
++		// on the exact same screen a full repaint would have produced.
++		const freshTerm = new VirtualTerminal(40, 6, 200);
++		const freshTui = new TUI(freshTerm);
++		freshTui.showOverlay(new MutableLinesComponent(updatedLines), FULLSCREEN_FILL);
++		let freshViewport: string[];
++		try {
++			freshTui.start();
++			await settle(freshTerm);
++			freshViewport = visible(freshTerm);
++		} finally {
++			freshTui.stop();
++		}
++
++		expect(diffedViewport).toEqual(updatedLines);
++		expect(diffedViewport).toEqual(freshViewport);
++	});
++
++	it("shows and positions the hardware cursor at CURSOR_MARKER when the overlay opts in with cursor:true", async () => {
++		const term = new VirtualTerminal(40, 6, 200);
++		const writes = captureWrites(term);
++		// The alt cursor is gated on the app-level hardware-cursor preference
++		// (settings `showHardwareCursor`, default on): with it off the focused
++		// component paints an in-band caret instead, and voice mode / live
++		// commands switch it off deliberately.
++		const tui = new TUI(term, true);
++		const overlay = new FocusedCursorLinesComponent(rows("row-", 6), 2, 3);
++		tui.showOverlay(overlay, { ...FULLSCREEN_FILL, cursor: true });
++
++		try {
++			tui.start();
++			// showOverlay() focuses its own component when it becomes the visible
++			// overlay, so the marker is emitted from the very first render.
++			expect(overlay.focused).toBeTrue();
++			await settle(term);
++
++			const payload = writes.join("");
++			expect(payload).toContain("\x1b[?25h");
++			// The marker is an internal sentinel; it must never reach the
++			// terminal, only steer where the hardware cursor is placed.
++			expect(payload).not.toContain(CURSOR_MARKER);
++			expect(term.getCursor()).toEqual({ row: 2, col: 3 });
++		} finally {
++			tui.stop();
++		}
++	});
++
++	it("leaves the hardware cursor hidden for fullscreen overlays that do not opt into cursor:true", async () => {
++		const term = new VirtualTerminal(40, 6, 200);
++		const writes = captureWrites(term);
++		const tui = new TUI(term, true);
++		// Focused and marker-emitting exactly like the opt-in case above — only
++		// the missing `cursor: true` should differ in observed behavior. Every
++		// existing static modal (plan review, setup wizard, transcript viewer)
++		// relies on this staying true.
++		const overlay = new FocusedCursorLinesComponent(rows("row-", 6), 2, 3);
++		tui.showOverlay(overlay, FULLSCREEN_FILL);
++
++		try {
++			tui.start();
++			expect(overlay.focused).toBeTrue();
++			await settle(term);
++
++			const payload = writes.join("");
++			expect(payload).not.toContain("\x1b[?25h");
++			expect(payload).not.toContain(CURSOR_MARKER);
++		} finally {
++			tui.stop();
++		}
++	});
++
++	it("requestRender(true) rewrites every row even when the alt frame is byte-identical to the last paint", async () => {
++		const term = new VirtualTerminal(40, 6, 200);
++		const writes = captureWrites(term);
++		const tui = new TUI(term);
++		const overlay = new MutableLinesComponent(rows("row-", 6));
++		tui.showOverlay(overlay, FULLSCREEN_FILL);
++
++		try {
++			tui.start();
++			await settle(term);
++
++			const beforeForce = writes.length;
++			// Content is untouched — a per-row diff would normally see zero
++			// changed rows and write nothing. The forced-repaint contract must
++			// still win, so a corrupted modal (garbled by e.g. a stray host
++			// escape sequence) can always be repaired with requestRender(true).
++			tui.requestRender(true);
++			await settle(term);
++
++			const forcedWrite = writes.slice(beforeForce).join("");
++			for (const rowText of rows("row-", 6)) {
++				expect(forcedWrite).toContain(rowText);
++			}
++		} finally {
++			tui.stop();
++		}
++	});
++
++	it("coalesces adjacent changed rows into one jump and writes nothing at all when the frame is identical", async () => {
++		const term = new VirtualTerminal(40, 6, 200);
++		const writes = captureWrites(term);
++		const tui = new TUI(term);
++		const overlay = new MutableLinesComponent(rows("row-", 6));
++		tui.showOverlay(overlay, FULLSCREEN_FILL);
++
++		try {
++			tui.start();
++			await settle(term);
++			const enterRedraws = tui.fullRedraws;
++
++			const beforeUpdate = writes.length;
++			overlay.setLines(["row-0", "row-1", "changed-2", "changed-3", "row-4", "row-5"]);
++			tui.requestRender();
++			await settle(term);
++
++			const diffWrite = writes.slice(beforeUpdate).join("");
++			// Rows 2 and 3 are adjacent: one absolute jump to row 3 (1-based) and a
++			// CRLF to reach row 4. A second jump would be dead bytes, and a row-by-row
++			// diff is not a full redraw.
++			expect(diffWrite.match(/\x1b\[\d+;1H/g)).toEqual(["\x1b[3;1H"]);
++			expect(diffWrite).toContain("changed-2");
++			expect(diffWrite).toContain("changed-3");
++			expect(diffWrite).toContain("\r\n");
++			expect(tui.fullRedraws).toBe(enterRedraws);
++			expect(visible(term)).toEqual(["row-0", "row-1", "changed-2", "changed-3", "row-4", "row-5"]);
++
++			const beforeIdle = writes.length;
++			tui.requestRender();
++			await settle(term);
++			expect(writes.slice(beforeIdle)).toEqual([]);
++		} finally {
++			tui.stop();
++		}
++	});
++
++	it("rewrites every row after a height change, when the cached frame no longer covers the screen", async () => {
++		const term = new VirtualTerminal(40, 6, 200);
++		const writes = captureWrites(term);
++		const tui = new TUI(term);
++		tui.showOverlay(new MutableLinesComponent(rows("row-", 6)), FULLSCREEN_FILL);
++
++		try {
++			tui.start();
++			await settle(term);
++
++			const beforeResize = writes.length;
++			term.resize(40, 9);
++			// Integration against the real resize settle window (120 ms of wall
++			// clock in the scheduler, not the render throttle the monotonic clock
++			// above neutralizes), so this one genuinely has to wait it out.
++			await Bun.sleep(160);
++			await settle(term);
++
++			const resizeWrite = writes.slice(beforeResize).join("");
++			// The diff base describes 6 rows; three more just appeared, so the
++			// frame is repainted from home rather than diffed against a shape the
++			// screen no longer has.
++			expect(resizeWrite).toContain("\x1b[H");
++			for (const rowText of rows("row-", 6)) {
++				expect(resizeWrite).toContain(rowText);
++			}
++			expect(visible(term).filter(Boolean)).toEqual(rows("row-", 6));
++		} finally {
++			tui.stop();
++		}
++	});
++
++	it("moves the hardware cursor without repainting a row when only the caret moved", async () => {
++		const term = new VirtualTerminal(40, 6, 200);
++		const writes = captureWrites(term);
++		const tui = new TUI(term, true);
++		const overlay = new MutableLinesComponent([`ed> ab${CURSOR_MARKER}`, ...rows("row-", 5)]);
++		tui.showOverlay(overlay, { ...FULLSCREEN_FILL, cursor: true });
++
++		try {
++			tui.start();
++			await settle(term);
++			expect(term.getCursor()).toEqual({ row: 0, col: 6 });
++
++			const beforeMove = writes.length;
++			overlay.setLines([`ed> a${CURSOR_MARKER}b`, ...rows("row-", 5)]);
++			tui.requestRender();
++			await settle(term);
++
++			// Markers are stripped before the diff, so every row is byte-identical
++			// and the caret move must cost one cursor block — no row rewrite.
++			const moveWrite = writes.slice(beforeMove).join("");
++			expect(moveWrite).not.toContain("ed>");
++			expect(moveWrite).toContain("\x1b[1;6H\x1b[?25h");
++			expect(term.getCursor()).toEqual({ row: 0, col: 5 });
++		} finally {
++			tui.stop();
++		}
++	});
++
++	it("restores the normal screen's cursor tracking when the fullscreen overlay closes", async () => {
++		const term = new VirtualTerminal(40, 8, 200);
++		const tui = new TUI(term, true);
++		// 15 frame rows over an 8-row viewport (windowTop 7) with the marker on
++		// frame row 12, i.e. screen row 5. The two rows below it are the point:
++		// with the caret parked on the bottom row the terminal's own clamp would
++		// swallow a stale cursor origin and hide the regression.
++		tui.addChild(new MutableLinesComponent([...rows("base-", 12), `input>${CURSOR_MARKER}`, "tail-0", "tail-1"]));
++
++		try {
++			tui.start();
++			await settle(term);
++			expect(term.getCursor()).toEqual({ row: 5, col: 6 });
++
++			const handle = tui.showOverlay(new MutableLinesComponent([`edit>${CURSOR_MARKER}`, ...rows("modal-", 7)]), {
++				...FULLSCREEN_FILL,
++				cursor: true,
++			});
++			await settle(term);
++			expect(term.getCursor()).toEqual({ row: 0, col: 5 });
++
++			handle.hide();
++			await settle(term);
++			// While the overlay was up the tracked cursor row was an ABSOLUTE alt
++			// row. `\x1b[?1049l` restores the terminal's own saved cursor, so the
++			// tracker has to revert with it; otherwise the first normal-screen
++			// cursor move is computed from the wrong origin and the caret lands on
++			// the wrong line (the "cursor broken after using fullscreen" report).
++			expect(term.getCursor()).toEqual({ row: 5, col: 6 });
++			expect(visible(term).at(-1)).toBe("tail-1");
++		} finally {
++			tui.stop();
++		}
++	});
++
++	it("hides a visible alt cursor before leaving the alt buffer", async () => {
++		const term = new VirtualTerminal(40, 6, 200);
++		const tui = new TUI(term, true);
++		tui.addChild(new MutableLinesComponent(rows("base-", 6)));
++
++		try {
++			tui.start();
++			await settle(term);
++			// A second overlay keeps the stack non-empty, so hiding the fullscreen
++			// one leaves the alt buffer without passing through the stack-empty
++			// hideCursor() in removeOverlay — the exit itself has to do it.
++			tui.showOverlay(new MutableLinesComponent(["UNDER"]), { width: "50%" });
++			const full = tui.showOverlay(new MutableLinesComponent([`edit>${CURSOR_MARKER}`, ...rows("modal-", 5)]), {
++				...FULLSCREEN_FILL,
++				cursor: true,
++			});
++			await settle(term);
++			expect(term.getCursor()).toEqual({ row: 0, col: 5 });
++
++			const writes = captureWrites(term);
++			full.setHidden(true);
++			await settle(term);
++
++			const exitWrite = writes.join("");
++			// DECTCEM is not part of what `\x1b[?1049l` restores, so a visible alt
++			// caret would survive onto the transcript.
++			expect(exitWrite).toContain("\x1b[?25l\x1b[?1006l");
++			// The kitty pop still sits flush against the buffer switch.
++			expect(exitWrite).toContain("\x1b[<u\x1b[?1049l");
++			expect(visible(term).some(line => line.includes("UNDER"))).toBeTrue();
++		} finally {
++			tui.stop();
++		}
++	});
++
++	it("places the shell prompt on the first free row after content when stop() tears down a fullscreen+cursor:true overlay that never closed", async () => {
++		const term = new VirtualTerminal(40, 8, 200);
++		const tui = new TUI(term, true);
++		// Six rows of ordinary content with the caret on the last one — the
++		// normal-screen editor focused before `/tui fullscreen` opens.
++		tui.addChild(new MutableLinesComponent([...rows("row-", 5), `edit>${CURSOR_MARKER}`]));
++
++		try {
++			tui.start();
++			await settle(term);
++			expect(term.getCursor()).toEqual({ row: 5, col: 5 });
++
++			// Open the fullscreen editor overlay (mirrors `/tui fullscreen`'s own
++			// `cursor: true` opt-in) with its own caret on the alt screen's last row
++			// — far from the normal screen's row 5, so a stale tracked cursor row is
++			// unmistakable in the teardown math below.
++			tui.showOverlay(new MutableLinesComponent([...rows("modal-", 7), `alt-edit>${CURSOR_MARKER}`]), {
++				...FULLSCREEN_FILL,
++				cursor: true,
++			});
++			await settle(term);
++			expect(term.getCursor()).toEqual({ row: 7, col: 9 });
++
++			// stop() runs with the overlay STILL open — the app quitting
++			// mid-session, not the overlay closing first. `#hardwareCursorRow` must
++			// still be reverted to the normal screen's tracked row (5) before the
++			// "place shell after content" math below runs, or it derives the move
++			// from the alt screen's absolute row (7) instead and overshoots upward.
++			const writes = captureWrites(term);
++			tui.stop();
++
++			const teardown = writes.join("");
++			// Without the fix this wrote "\x1b[?1049l\x1b[1A\r" and landed on row 4
++			// — one row into the six-line transcript instead of below it.
++			expect(teardown).toContain("\x1b[?1049l\x1b[1B\r");
++			expect(term.getCursor().row).toBe(6);
++			expect(visible(term).slice(0, 6)).toEqual([...rows("row-", 5), "edit>"]);
++		} finally {
++			tui.stop();
++		}
++	});
++
++	it("flushes an already-queued alt exit on stop(), even before a deferred Ghostty image repaint gets to run it", () => {
++		const originalId = terminal.id;
++		const originalProtocol = terminal.imageProtocol;
++		const originalGraphics = { ...getKittyGraphics() };
++		const term = new VirtualTerminal(40, 12);
++		const writes = captureWrites(term);
++
++		let now = 0;
++		const scheduled: Array<{ delayMs: number; callback: () => void; canceled: boolean }> = [];
++		const renderScheduler = {
++			now: () => now,
++			scheduleImmediate: (callback: () => void) => callback(),
++			scheduleRender: (callback: () => void, delayMs: number) => {
++				const entry = { delayMs, callback, canceled: false };
++				scheduled.push(entry);
++				return {
++					cancel: () => {
++						entry.canceled = true;
++					},
++				};
++			},
++		};
++
++		terminal.id = "ghostty";
++		terminal.imageProtocol = ImageProtocol.Kitty;
++		setKittyGraphics({ unicodePlaceholders: true });
++		const tui = new TUI(term, undefined, { renderScheduler });
++		tui.addChild(new Text("old session", 0, 0));
++
++		try {
++			tui.start();
++			const overlay = tui.showOverlay(new Text("session selector", 0, 0), {
++				width: "100%",
++				maxHeight: "100%",
++				fullscreen: true,
++			});
++			tui.addChild(makeImage(tui.imageBudget, "resumed-image"));
++			tui.requestRender(true, { clearScrollback: true });
++			overlay.hide();
++
++			// The ordinary render `hide()` scheduled runs the alt-exit transition —
++			// `#altActive` goes false and the exit sequence queues in
++			// `#pendingAltExit` — but composing this same frame discovers the new
++			// image's pending transmit, which the Ghostty startup-settle window
++			// defers: the render returns before it ever gets to flush that queued
++			// exit (mirrors "keeps a deferred fullscreen exit..." in
++			// image-budget.test.ts, which resolves it via the later repaint instead
++			// of stop()).
++			const queued = scheduled.find(entry => !entry.canceled);
++			expect(queued).toBeDefined();
++			now = 40;
++			queued!.canceled = true;
++			queued!.callback();
++
++			const delayed = scheduled.find(entry => !entry.canceled);
++			expect(delayed).toBeDefined();
++			expect(writes.some(write => write.includes("\x1b[?1049l"))).toBe(false);
++			expect(visible(term).some(line => line.includes("session selector"))).toBeTrue();
++
++			// The app quits before that deferred repaint gets its turn — `#altActive`
++			// is already false, so only the `#pendingAltExit` half of stop()'s guard
++			// can still flush the buffer restore; dropping that half would leave the
++			// terminal parked on the alternate screen forever after the process exits.
++			tui.stop();
++
++			const exitWrites = writes.filter(write => write.includes("\x1b[?1049l"));
++			expect(exitWrites).toHaveLength(1);
++		} finally {
++			terminal.id = originalId;
++			terminal.imageProtocol = originalProtocol;
++			setKittyGraphics(originalGraphics);
++		}
++	});
++
++	it("re-emits an image row in the alt diff on every changed frame, even when its own text is unchanged", async () => {
++		const originalProtocol = terminal.imageProtocol;
++		terminal.imageProtocol = ImageProtocol.Kitty;
++		try {
++			const term = new VirtualTerminal(40, 4, 200);
++			const writes = captureWrites(term);
++			const tui = new TUI(term);
++			// A Kitty direct-placement needle without the strict placement syntax:
++			// recognized by `TERMINAL.isImageLine`, but not `parseKittyDirectPlacementLine`,
++			// so `#lineRewriteSequence` writes it back verbatim.
++			const imageLine = "\x1b_Gimage-placeholder-row\x1b\\";
++			const overlay = new MutableLinesComponent(["row-0", "row-1", imageLine, "row-3"]);
++			tui.showOverlay(overlay, FULLSCREEN_FILL);
++
++			try {
++				tui.start();
++				await settle(term);
++
++				const beforeUpdate = writes.length;
++				// Only row 0 changes; the image row (row 2) is not adjacent to it,
++				// and its own text is byte-identical to the last paint — Kitty and
++				// Sixel placements can still be dropped silently by scroll/redraw
++				// activity elsewhere, so a repeated placeholder string is no signal
++				// that the placement itself survived.
++				overlay.setLines(["row-0-updated", "row-1", imageLine, "row-3"]);
++				tui.requestRender();
++				await settle(term);
++
++				const diffWrite = writes.slice(beforeUpdate).join("");
++				const jumps = diffWrite.match(/\x1b\[\d+;1H/g);
++				// Two separate runs — row 0 (the real change) and row 2 (the image,
++				// forced regardless of its unchanged text) — never coalesced across
++				// the untouched row 1 between them.
++				expect(jumps).toEqual(["\x1b[1;1H", "\x1b[3;1H"]);
++				expect(diffWrite).toContain("row-0-updated");
++				// Re-emitted inside its own jump — whatever SGR reset the line
++				// rewrite happens to prefix it with.
++				expect(diffWrite.slice(diffWrite.indexOf("\x1b[3;1H"))).toContain(imageLine);
++				expect(diffWrite).not.toContain("row-1");
++				expect(diffWrite).not.toContain("row-3");
++			} finally {
++				tui.stop();
++			}
++		} finally {
++			terminal.imageProtocol = originalProtocol;
++		}
++	});
++});
+-- 
+2.55.0
+
