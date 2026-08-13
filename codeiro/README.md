@@ -117,11 +117,22 @@ printf '%s\n' codeiro/patches/*.patch | sed 's#^codeiro/patches/##' >> codeiro/p
 O `:(exclude)codeiro` mantém a série fora dela mesma: sem ele cada regeneração
 embute os patches anteriores no patch novo.
 
-Confira que a série reproduz a branch a partir da tag limpa antes de publicar:
+Confira que a série reproduz a branch a partir da tag limpa antes de publicar. A
+série é **ordenada**: cada patch aplica sobre o resultado do anterior, então
+validar todos os arquivos numa só chamada de `git apply --check` não valida nada
+— o segundo patch é conferido contra a árvore crua e falha com `No such file or
+directory` mesmo numa série perfeitamente válida. Aplique em ordem, exatamente
+como `.github/workflows/codeiro-patch-series.yml:38-46` faz:
 
 ```sh
-git archive <nova-tag> | tar -x -C /tmp/check
-(cd /tmp/check && git apply --check /caminho/codeiro/patches/*.patch)
+base="$(sed -n 's/^# base: //p' codeiro/patches/series)"
+staging="$(mktemp -d)"
+git archive "${base}" | tar -x -C "${staging}"
+while IFS= read -r patch || [ -n "${patch}" ]; do
+    case "${patch}" in ""|\#*) continue ;; esac
+    git -C "${staging}" apply --check "${PWD}/codeiro/patches/${patch}"
+    git -C "${staging}" apply "${PWD}/codeiro/patches/${patch}"
+done < codeiro/patches/series
 ```
 
 Depois de validar a série, publique a branch de desenvolvimento e crie uma

@@ -3,21 +3,26 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	applyPatchSeries,
 	buildUpstreamReleaseNotice,
 	CODEIRO_LOCK_FILENAME,
 	CODEIRO_MANIFEST_FILENAME,
 	type CodeiroInstall,
 	type CodeiroUpdateDeps,
 	describeCodeiroInstall,
+	ensureBaseObjects,
 	ensureNativeAddonDirectoryChain,
+	formatSeriesConflictReport,
 	loadCodeiroInstall,
 	parseCodeiroManifest,
 	parseLsRemote,
+	parsePatchFiles,
 	parsePatchSeries,
+	parsePatchSeriesBase,
 	replaceNativeAddonFile,
 	resolveLatestStableRelease,
 	resolveManifestCandidates,
-	resolvePatchSeriesFiles,
+	resolvePatchSeries,
 	resolveSourceBuildTarget,
 	resolveStagingLayout,
 	runCodeiroSourceUpdate,
@@ -300,6 +305,47 @@ describe("parsePatchSeries", () => {
 	});
 });
 
+describe("parsePatchSeriesBase", () => {
+	it("reads the base tag from the header", () => {
+		expect(parsePatchSeriesBase("# base: v17.2.15\n0001-a.patch\n")).toBe("v17.2.15");
+	});
+
+	it("returns nothing when the series states no base", () => {
+		expect(parsePatchSeriesBase("# series\n0001-a.patch\n")).toBeUndefined();
+	});
+
+	it.each(["../../etc/passwd", "--upload-pack=evil", "refs/tags/v1 v2"])(
+		"refuses base %s instead of handing it to git",
+		base => {
+			expect(parsePatchSeriesBase(`# base: ${base}\n0001-a.patch\n`)).toBeUndefined();
+		},
+	);
+});
+
+describe("parsePatchFiles", () => {
+	it("collects post-image paths in diff order and ignores everything else", () => {
+		const files = parsePatchFiles(
+			[
+				"From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001",
+				"Subject: [PATCH] feat: something",
+				"---",
+				" packages/coding-agent/CHANGELOG.md | 2 +-",
+				"diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md",
+				"index 1111111..2222222 100644",
+				"--- a/packages/coding-agent/CHANGELOG.md",
+				"+++ b/packages/coding-agent/CHANGELOG.md",
+				"@@ -1,3 +1,3 @@",
+				"diff --git a/old/name.ts b/new/name.ts",
+				"similarity index 90%",
+				"rename from old/name.ts",
+				"rename to new/name.ts",
+			].join("\n"),
+		);
+
+		expect(files).toEqual(["packages/coding-agent/CHANGELOG.md", "new/name.ts"]);
+	});
+});
+
 describe("validateNativeArchiveListing", () => {
 	it("accepts package-root files and directories", () => {
 		expect(() => validateNativeArchiveListing(["package/", "package/pi_natives.darwin-arm64.node"])).not.toThrow();
@@ -343,7 +389,7 @@ describe("replaceNativeAddonFile", () => {
 	});
 });
 
-describe("resolvePatchSeriesFiles", () => {
+describe("resolvePatchSeries", () => {
 	async function makePatchRepo(series: string, patches: readonly string[]): Promise<string> {
 		const repo = await makeTempDir();
 		await fs.mkdir(path.join(repo, "codeiro", "patches"), { recursive: true });
@@ -354,45 +400,262 @@ describe("resolvePatchSeriesFiles", () => {
 		return repo;
 	}
 
-	it("resolves series entries relative to the series file, in order", async () => {
-		const repo = await makePatchRepo("0002-b.patch\n0001-a.patch\n", ["0001-a.patch", "0002-b.patch"]);
-
-		const files = await resolvePatchSeriesFiles(repo, "codeiro/patches/series");
-
-		expect(files).toEqual([
-			path.join(repo, "codeiro", "patches", "0002-b.patch"),
-			path.join(repo, "codeiro", "patches", "0001-a.patch"),
+	it("resolves series entries relative to the series file, in order, with the base tag", async () => {
+		const repo = await makePatchRepo("# base: v17.2.15\n0002-b.patch\n0001-a.patch\n", [
+			"0001-a.patch",
+			"0002-b.patch",
 		]);
+
+		const series = await resolvePatchSeries(repo, "codeiro/patches/series");
+
+		expect(series).toEqual({
+			base: "v17.2.15",
+			files: [
+				path.join(repo, "codeiro", "patches", "0002-b.patch"),
+				path.join(repo, "codeiro", "patches", "0001-a.patch"),
+			],
+		});
+	});
+
+	it("resolves a series with no base header, which only costs the three-way fallback", async () => {
+		const repo = await makePatchRepo("0001-a.patch\n", ["0001-a.patch"]);
+
+		const series = await resolvePatchSeries(repo, "codeiro/patches/series");
+
+		expect(series.base).toBeUndefined();
+		expect(series.files).toEqual([path.join(repo, "codeiro", "patches", "0001-a.patch")]);
 	});
 
 	it("fails when the series file is missing", async () => {
 		const repo = await makeTempDir();
 
-		await expect(resolvePatchSeriesFiles(repo, "codeiro/patches/series")).rejects.toThrow(/Patch series not found/);
+		await expect(resolvePatchSeries(repo, "codeiro/patches/series")).rejects.toThrow(/Patch series not found/);
 	});
 
 	it("fails closed on an empty series instead of building an unpatched binary", async () => {
 		const repo = await makePatchRepo("# no patches yet\n", []);
 
-		await expect(resolvePatchSeriesFiles(repo, "codeiro/patches/series")).rejects.toThrow(/lists no patches/);
+		await expect(resolvePatchSeries(repo, "codeiro/patches/series")).rejects.toThrow(/lists no patches/);
 	});
 
 	it("fails when a listed patch is missing", async () => {
 		const repo = await makePatchRepo("0001-a.patch\n0002-b.patch\n", ["0001-a.patch"]);
 
-		await expect(resolvePatchSeriesFiles(repo, "codeiro/patches/series")).rejects.toThrow(/missing/);
+		await expect(resolvePatchSeries(repo, "codeiro/patches/series")).rejects.toThrow(/missing/);
 	});
 
 	it("fails when an entry escapes the patch repository", async () => {
 		const repo = await makePatchRepo("../../../../etc/passwd\n", []);
 
-		await expect(resolvePatchSeriesFiles(repo, "codeiro/patches/series")).rejects.toThrow(/escapes/);
+		await expect(resolvePatchSeries(repo, "codeiro/patches/series")).rejects.toThrow(/escapes/);
 	});
 
 	it("fails when the series path escapes the patch repository", async () => {
 		const repo = await makeTempDir();
 
-		await expect(resolvePatchSeriesFiles(repo, "../series")).rejects.toThrow(/escapes/);
+		await expect(resolvePatchSeries(repo, "../series")).rejects.toThrow(/escapes/);
+	});
+});
+
+describe("applyPatchSeries", () => {
+	// Real repositories rather than mocks: what is under test is whether git
+	// can perform the three-way merge, and only git can answer that.
+	const GIT_ENV = {
+		...process.env,
+		GIT_CONFIG_GLOBAL: os.devNull,
+		GIT_CONFIG_SYSTEM: os.devNull,
+		GIT_AUTHOR_NAME: "Fixture",
+		GIT_AUTHOR_EMAIL: "fixture@example.com",
+		GIT_COMMITTER_NAME: "Fixture",
+		GIT_COMMITTER_EMAIL: "fixture@example.com",
+	};
+
+	async function git(dir: string, ...args: string[]): Promise<void> {
+		const proc = Bun.spawn(["git", ...args], { cwd: dir, env: GIT_ENV, stdout: "pipe", stderr: "pipe" });
+		const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+		if (exitCode !== 0) throw new Error(`git ${args.join(" ")} failed (${exitCode}): ${stderr}`);
+	}
+
+	async function writeFiles(dir: string, files: Record<string, string>): Promise<void> {
+		for (const [name, content] of Object.entries(files)) {
+			const file = path.join(dir, name);
+			await fs.mkdir(path.dirname(file), { recursive: true });
+			await fs.writeFile(file, content);
+		}
+	}
+
+	const DOC_BASE = [
+		"# Changelog",
+		"",
+		"## Unreleased",
+		"- alpha",
+		"- beta",
+		"- gamma",
+		"- delta",
+		"- epsilon",
+		"",
+	].join("\n");
+	// The fork's change; `- alpha` sits at line 4, so its hunk carries lines 1-7
+	// as context.
+	const DOC_FORKED = DOC_BASE.replace("- alpha", "- alpha (fork)");
+	// Drift inside that context but on another line: a direct apply refuses it,
+	// a three-way merge absorbs it.
+	const DOC_DRIFTED = DOC_BASE.replace("- delta", "- delta (upstream)");
+	// The same line rewritten differently: no merge can decide this one.
+	const DOC_REWRITTEN = DOC_BASE.replace("- alpha", "- alpha (upstream rewrote it)");
+	const SRC_BASE = [
+		"export const value = 1;",
+		"",
+		"export function main(): number {",
+		"\treturn value;",
+		"}",
+		"",
+	].join("\n");
+	const SRC_FORKED = SRC_BASE.replace("value = 1", "value = 2");
+
+	/**
+	 * Build an `origin` repository holding the base tag plus one commit per
+	 * patch, and a `stage` checkout the series is applied to. `stage` defaults
+	 * to the base content, which is the only case where every patch applies
+	 * directly.
+	 */
+	async function makeSeriesFixture(options: {
+		base: Record<string, string>;
+		commits: readonly { subject: string; files: Record<string, string> }[];
+		stage?: Record<string, string>;
+	}): Promise<{ origin: string; stage: string; patches: string[]; baseTag: string }> {
+		const origin = await makeTempDir();
+		await git(origin, "init", "--quiet", "-b", "main");
+		await writeFiles(origin, options.base);
+		await git(origin, "add", "-A");
+		await git(origin, "commit", "--quiet", "-m", "base");
+		await git(origin, "tag", "base-tag");
+		for (const commit of options.commits) {
+			await writeFiles(origin, commit.files);
+			await git(origin, "add", "-A");
+			await git(origin, "commit", "--quiet", "-m", commit.subject);
+		}
+
+		const patchDir = await makeTempDir();
+		await git(origin, "format-patch", "--quiet", `-${options.commits.length}`, "-o", patchDir);
+		const patches = (await fs.readdir(patchDir)).sort().map(name => path.join(patchDir, name));
+
+		const stage = await makeTempDir();
+		await git(stage, "init", "--quiet", "-b", "main");
+		await writeFiles(stage, options.stage ?? options.base);
+		await git(stage, "add", "-A");
+		await git(stage, "commit", "--quiet", "-m", "staged upstream tag");
+		return { origin, stage, patches, baseTag: "base-tag" };
+	}
+
+	it("applies a clean series without healing anything", async () => {
+		const fixture = await makeSeriesFixture({
+			base: { "CHANGELOG.md": DOC_BASE, "src.ts": SRC_BASE },
+			commits: [
+				{ subject: "docs alpha", files: { "CHANGELOG.md": DOC_FORKED } },
+				{ subject: "code value", files: { "src.ts": SRC_FORKED } },
+			],
+		});
+
+		const report = await applyPatchSeries(fixture.stage, fixture.patches, { threeWay: true });
+
+		expect(report).toEqual({ applied: 2, total: 2, healed: [] });
+		expect(report.conflict).toBeUndefined();
+	});
+
+	it("heals mechanical drift through a three-way merge against the base tag", async () => {
+		const fixture = await makeSeriesFixture({
+			base: { "CHANGELOG.md": DOC_BASE },
+			commits: [{ subject: "docs alpha", files: { "CHANGELOG.md": DOC_FORKED } }],
+			stage: { "CHANGELOG.md": DOC_DRIFTED },
+		});
+
+		// Without the base objects there is nothing to merge against, which is
+		// the state a fresh depth-1 checkout of the new tag is in.
+		const direct = await applyPatchSeries(fixture.stage, fixture.patches, { threeWay: false });
+		expect(direct.applied).toBe(0);
+		expect(direct.conflict?.threeWay).toBe(false);
+
+		expect(await ensureBaseObjects(fixture.stage, fixture.origin, fixture.baseTag)).toBe(true);
+		const report = await applyPatchSeries(fixture.stage, fixture.patches, { threeWay: true });
+
+		expect(report.conflict).toBeUndefined();
+		expect(report.applied).toBe(1);
+		expect(report.healed).toEqual([path.basename(fixture.patches[0])]);
+		// Both sides survived: that is what "drift absorbed" has to mean.
+		const merged = await fs.readFile(path.join(fixture.stage, "CHANGELOG.md"), "utf8");
+		expect(merged).toContain("- alpha (fork)");
+		expect(merged).toContain("- delta (upstream)");
+	});
+
+	it("reports a documentation-only conflict no merge can resolve", async () => {
+		const fixture = await makeSeriesFixture({
+			base: { "CHANGELOG.md": DOC_BASE },
+			commits: [{ subject: "docs alpha", files: { "CHANGELOG.md": DOC_FORKED } }],
+			stage: { "CHANGELOG.md": DOC_REWRITTEN },
+		});
+		expect(await ensureBaseObjects(fixture.stage, fixture.origin, fixture.baseTag)).toBe(true);
+
+		const report = await applyPatchSeries(fixture.stage, fixture.patches, { threeWay: true });
+		const { conflict } = report;
+		if (!conflict) throw new Error("expected the series to conflict");
+
+		expect(conflict).toMatchObject({
+			patch: path.basename(fixture.patches[0]),
+			index: 1,
+			total: 1,
+			files: ["CHANGELOG.md"],
+			docOnly: true,
+			threeWay: true,
+		});
+		expect(conflict.detail).toContain("CHANGELOG.md");
+		expect(report.applied).toBe(0);
+
+		const text = formatSeriesConflictReport(conflict, {
+			applied: report.applied,
+			healed: report.healed.length,
+			upstreamTag: "v17.3.0",
+			base: fixture.baseTag,
+			sourceDir: fixture.stage,
+		});
+		expect(text).toContain(`Patch 1/1 does not apply: ${conflict.patch}`);
+		expect(text).toContain("Scope: documentation only");
+		expect(text).toContain("Three-way: attempted against base base-tag");
+		expect(text).toContain("Update not applied");
+		expect(text).toContain("Recipe: codeiro/docs/rebase-da-serie.md");
+	});
+
+	it("does not call a conflict documentation-only when the patch also touches code", async () => {
+		const fixture = await makeSeriesFixture({
+			base: { "CHANGELOG.md": DOC_BASE, "src.ts": SRC_BASE },
+			commits: [{ subject: "feat mixed", files: { "CHANGELOG.md": DOC_FORKED, "src.ts": SRC_FORKED } }],
+			stage: { "CHANGELOG.md": DOC_REWRITTEN, "src.ts": SRC_BASE },
+		});
+		expect(await ensureBaseObjects(fixture.stage, fixture.origin, fixture.baseTag)).toBe(true);
+
+		const report = await applyPatchSeries(fixture.stage, fixture.patches, { threeWay: true });
+		const { conflict } = report;
+		if (!conflict) throw new Error("expected the series to conflict");
+
+		expect(conflict.files).toEqual(["CHANGELOG.md", "src.ts"]);
+		expect(conflict.docOnly).toBe(false);
+
+		const text = formatSeriesConflictReport(conflict, {
+			applied: report.applied,
+			healed: report.healed.length,
+			upstreamTag: "v17.3.0",
+			base: fixture.baseTag,
+			sourceDir: fixture.stage,
+		});
+		expect(text).toContain("Scope: code, not only documentation");
+		expect(text).toContain("the hunks need a human or agent decision");
+	});
+
+	it("treats an unreachable base tag as a run without the three-way fallback", async () => {
+		const stage = await makeTempDir();
+		await git(stage, "init", "--quiet", "-b", "main");
+
+		expect(await ensureBaseObjects(stage, path.join(stage, "missing-remote.git"), "v0.0.0")).toBe(false);
 	});
 });
 
