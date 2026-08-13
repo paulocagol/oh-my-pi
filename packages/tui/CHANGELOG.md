@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Fullscreen overlays can opt into a live hardware cursor (`cursor: true` in `OverlayOptions`), so an alternate-screen surface that hosts a text editor shows a real caret instead of the engine keeping it hidden for the whole overlay lifetime.
+- `TUI.beginRenderBurst()`: while a pointer gesture is in flight the render cadence floor drops from 30 fps to 120 fps for 150 ms, so a scroll surface can paint one frame per native wheel report instead of coalescing the burst into a few large jumps. Adaptive backpressure and the ConPTY settle window still bound the actual rate, so an expensive frame throttles itself back down.
+
+### Fixed
+
+- Fixed alternate-screen overlays rewriting every row on every frame. The alt path now emits a per-line diff, so a live fullscreen surface stops flooding the terminal: over an identical streaming run the same content went from 142 KB to 79 KB and from 35 full-screen repaints to 0. Forced repaints (`resetDisplay()`, `requestRender(true)`) still paint in full, and image rows are always re-emitted because their placement bytes depend on epoch/geometry state that the line text does not capture.
+- Fixed the shell prompt landing on top of the transcript when the process exits while a cursor-enabled fullscreen overlay is still open: `stop()` tore down the alt buffer without restoring `#hardwareCursorRow`, leaving it holding an absolute alt-screen row while the teardown math reads it as a frame row.
+
 ## [17.2.13] - 2026-08-11
 
 ### Fixed

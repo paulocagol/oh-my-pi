@@ -7,6 +7,17 @@ import {
 	type ViewportTailProvider,
 } from "@oh-my-pi/pi-tui";
 import { isToolActivityComponent } from "./tool-activity";
+import { UserMessageComponent } from "./user-message";
+
+/** A user prompt block located in the most recent transcript render. */
+export interface TranscriptPromptAnchor {
+	/** The prompt block itself, so callers can re-find it after a rebuild reorders indices. */
+	component: Component;
+	/** Frame row of the prompt's first emitted content row. */
+	row: number;
+	/** The prompt text as typed. */
+	text: string;
+}
 
 /**
  * A transcript block that is still mutating (a foreground tool awaiting its
@@ -184,6 +195,8 @@ export class TranscriptContainer
 	// consumes the report and re-bases the baseline). Out-of-band renders
 	// between engine frames lower it; they can never inflate it.
 	#stableRowsFloor = 0;
+	// Recycled scratch buffer for getPromptAnchors(); rebuilt on every call.
+	#promptAnchors: TranscriptPromptAnchor[] = [];
 	override addChild(component: Component): void {
 		if (isToolActivityComponent(component)) component.setToolActivityVisible(this.#toolActivityVisible);
 		super.addChild(component);
@@ -196,6 +209,39 @@ export class TranscriptContainer
 			if (isToolActivityComponent(child)) child.setToolActivityVisible(visible);
 		}
 		this.invalidate();
+	}
+
+	/**
+	 * User prompts in the most recent {@link render}, in transcript order, each
+	 * with the frame row its first content line landed on. The fullscreen surface
+	 * uses this to anchor its sticky prompt header and prompt jumps to blocks
+	 * instead of raw line offsets, which survive reflow and streaming growth.
+	 *
+	 * The returned array is a recycled buffer rebuilt on each call from the most
+	 * recent render's block geometry; callers must consume it before the next
+	 * call rather than retaining it.
+	 */
+	getPromptAnchors(): readonly TranscriptPromptAnchor[] {
+		const anchors = this.#promptAnchors;
+		anchors.length = 0;
+		for (let i = 0; i < this.children.length; i++) {
+			const child = this.children[i];
+			if (!(child instanceof UserMessageComponent) || child.synthetic || child.text === "") continue;
+			const segment = this.#segments[i];
+			if (segment === undefined || segment.component !== child || segment.rowCount === 0) continue;
+			// Skip the bubble's painted top padding: those rows carry a background
+			// colour, so transcript assembly does not strip them as blank edges, and
+			// anchoring there would park the prompt's text one row off screen.
+			let offset = 0;
+			while (
+				offset < segment.contribution.length - 1 &&
+				Bun.stripANSI(segment.contribution[offset]!).trim() === ""
+			) {
+				offset++;
+			}
+			anchors.push({ component: child, row: segment.startRow + segment.sep + offset, text: child.text });
+		}
+		return anchors;
 	}
 
 	override invalidate(): void {

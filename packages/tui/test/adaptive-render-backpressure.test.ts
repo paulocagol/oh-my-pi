@@ -23,6 +23,8 @@ import { VirtualTerminal } from "./virtual-terminal";
 
 const MIN_RENDER_INTERVAL_MS = 1000 / 30;
 const MAX_ADAPTIVE_RENDER_MS = 200;
+const RENDER_BURST_INTERVAL_MS = 1000 / 120;
+const RENDER_BURST_WINDOW_MS = 150;
 
 class ScriptedFrameCost implements Component {
 	#nextCostMs: number | null = null;
@@ -168,6 +170,65 @@ describe("TUI adaptive render backpressure (#4145)", () => {
 			const delay = stepRender(scheduler);
 			expect(delay).not.toBeNull();
 			expect(delay!).toBeLessThanOrEqual(MAX_ADAPTIVE_RENDER_MS);
+		} finally {
+			tui.stop();
+		}
+	});
+});
+
+// The same scheduling seam, from the opposite direction: a pointer gesture
+// asks for display-rate sampling because the terminal itself moves its
+// viewport once per native wheel report. At the idle 30 fps floor a scroll
+// burst collapses into a few large jumps; inside the burst window each report
+// gets its own frame, and the window lapses on its own.
+describe("TUI render burst cadence", () => {
+	it("samples at display rate inside a gesture window and returns to the idle cadence after it lapses", () => {
+		const term = new VirtualTerminal(20, 4);
+		const scheduler = new DeferredRenderScheduler();
+		const probe = new ScriptedFrameCost();
+		probe.scheduler = scheduler;
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+		tui.addChild(probe);
+
+		try {
+			tui.start();
+			stepRender(scheduler);
+			scheduler.timers.length = 0;
+
+			probe.scheduleCost(1);
+			tui.requestRender();
+			const idleDelay = stepRender(scheduler);
+			expect(idleDelay).not.toBeNull();
+			expect(idleDelay!).toBeGreaterThan(RENDER_BURST_INTERVAL_MS);
+
+			// Each iteration consumes `delay + 1ms cost` of virtual time, so 25 of
+			// them span ~383ms and the 150ms window lapses mid-loop. Classify each
+			// frame by the clock reading the scheduler saw when it chose the delay.
+			const burstStartMs = scheduler.nowMs;
+			tui.beginRenderBurst();
+			const samples: Array<{ insideWindow: boolean; delayMs: number }> = [];
+			for (let index = 0; index < 25; index++) {
+				probe.scheduleCost(1);
+				const decidedAtMs = scheduler.nowMs;
+				tui.requestRender();
+				const delay = stepRender(scheduler);
+				expect(delay).not.toBeNull();
+				samples.push({ insideWindow: decidedAtMs - burstStartMs < RENDER_BURST_WINDOW_MS, delayMs: delay! });
+			}
+
+			// The window must actually lapse mid-loop, otherwise the assertions
+			// below would only cover one side of the transition.
+			const inside = samples.filter(sample => sample.insideWindow);
+			const outside = samples.filter(sample => !sample.insideWindow);
+			expect(inside.length).toBeGreaterThan(0);
+			expect(outside.length).toBeGreaterThan(0);
+			// Inside the gesture: display-rate sampling. After it: the idle floor,
+			// undisturbed by adaptive backpressure (frames cost 1ms here).
+			for (const sample of inside) expect(sample.delayMs).toBeLessThanOrEqual(RENDER_BURST_INTERVAL_MS);
+			for (const sample of outside) {
+				expect(sample.delayMs).toBeGreaterThan(RENDER_BURST_INTERVAL_MS);
+				expect(sample.delayMs).toBeLessThanOrEqual(MIN_RENDER_INTERVAL_MS);
+			}
 		} finally {
 			tui.stop();
 		}

@@ -163,6 +163,7 @@ import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent, HookSelectorSlider } from "./components/hook-selector";
 import { type PlanReviewAnnotationState, PlanReviewOverlay } from "./components/plan-review-overlay";
+import { PrimaryTranscriptFullscreen } from "./components/primary-transcript-fullscreen";
 import { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { TranscriptContainer } from "./components/transcript-container";
@@ -634,6 +635,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#pendingPlanModelSwitch = false;
 	#planModeHasEntered = false;
 	#planReviewOverlay: PlanReviewOverlay | undefined;
+	#primaryTranscriptFullscreen: PrimaryTranscriptFullscreen | undefined;
 	#planReviewOverlayHandle: OverlayHandle | undefined;
 	#planReviewCancel: (() => void) | undefined;
 	/** Serializable review annotations keyed by the resolved plan file path. */
@@ -4334,11 +4336,75 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.chatContainer.addChild(item);
 		if (item instanceof ChatBlock) item.mount(this.#chatHost);
 	}
-
 	resetTranscript(): void {
 		this.transcriptMessageComponents = new WeakMap<AgentMessage, Component>();
 		this.chatContainer.dispose();
 		this.chatContainer.clear();
+	}
+
+	setPrimaryTranscriptFullscreen(mode: string): void {
+		const normalized = mode.trim().toLowerCase();
+		if (normalized === "" || normalized === "status") {
+			this.showStatus(
+				this.#primaryTranscriptFullscreen ? "Fullscreen transcript enabled." : "Fullscreen transcript disabled.",
+			);
+			return;
+		}
+		if (normalized !== "fullscreen" && normalized !== "default" && normalized !== "close") {
+			this.showError("Usage: /tui [fullscreen|default|status]");
+			return;
+		}
+		if (normalized === "default" || normalized === "close") {
+			this.#primaryTranscriptFullscreen?.close();
+			return;
+		}
+		if (this.#primaryTranscriptFullscreen) return;
+
+		let overlayHandle: OverlayHandle | undefined;
+		const component = new PrimaryTranscriptFullscreen({
+			ui: this.ui,
+			transcript: this.chatContainer,
+			editor: this.editor,
+			// Exactly the containers the normal tree stacks around the editor, in
+			// the same order (see the addChild block in setup): the fullscreen
+			// frame composes over an empty base and never renders the root, so
+			// anything missing here is off screen while the surface is up — the
+			// working loader, the todo and subagent HUDs, error banners, pending
+			// messages and the hook widgets included.
+			chromeAbove: [
+				this.pendingMessagesContainer,
+				this.todoContainer,
+				this.subagentContainer,
+				this.btwContainer,
+				this.omfgContainer,
+				this.errorBannerContainer,
+				this.modelCycleContainer,
+				this.deferredCommandContainer,
+				this.statusContainer,
+				this.statusLine,
+				this.hookWidgetContainerAbove,
+			],
+			chromeBelow: [this.hookWidgetContainerBelow],
+			onClose: () => {
+				component.dispose();
+				overlayHandle?.hide();
+				this.#primaryTranscriptFullscreen = undefined;
+				this.ui.setFocus(this.editor);
+				this.ui.requestRender();
+			},
+		});
+		this.#primaryTranscriptFullscreen = component;
+		overlayHandle = this.ui.showOverlay(component, {
+			anchor: "top-left",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+			fullscreen: true,
+			mouseTracking: true,
+			cursor: true,
+		});
+		this.ui.setFocus(this.editor);
+		this.ui.requestRender();
 	}
 
 	showStatus(message: string, options?: { dim?: boolean }): void {

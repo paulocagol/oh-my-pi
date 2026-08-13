@@ -469,6 +469,12 @@ export interface OverlayOptions {
 	 * when native terminal text selection takes precedence over pointer events.
 	 */
 	mouseTracking?: boolean;
+	/**
+	 * Show the terminal's hardware cursor while this fullscreen overlay is up,
+	 * positioned at the focused component's CURSOR_MARKER. Defaults off: modals
+	 * paint their own in-band caret. Only meaningful with `fullscreen: true`.
+	 */
+	cursor?: boolean;
 }
 
 /**
@@ -948,6 +954,17 @@ export class TUI extends Container {
 	 * feels dead to the user and no longer justifies further CPU savings.
 	 */
 	static readonly #MAX_ADAPTIVE_RENDER_MS = 200;
+	/**
+	 * Cadence floor while a pointer gesture is in flight (see
+	 * {@link TUI.beginRenderBurst}) and how long that window lasts after the
+	 * last gesture event. 120 fps matches the fastest display refresh a
+	 * terminal presents at, so the consumer stops being the sampling
+	 * bottleneck; the window is short enough that an idle UI is back on the
+	 * 30 fps cadence one frame after the gesture stops.
+	 */
+	static readonly #RENDER_BURST_INTERVAL_MS = 1000 / 120;
+	static readonly #RENDER_BURST_WINDOW_MS = 150;
+	#renderBurstUntilMs = 0;
 	#inputRenderGraceUntilMs = 0;
 	// Pane-reflow settle window for tmux/screen/zellij. The host process gets
 	// SIGWINCH (and `process.stdout` already reports the new geometry) before
@@ -1118,12 +1135,22 @@ export class TUI extends Container {
 	// engine paints only the modal on the alt buffer and leaves every
 	// normal-screen accounting field (#previousFrameLength, #viewportTopRow, …)
 	// untouched, so exiting reconciles cleanly against the terminal-restored
-	// normal screen. #altPreviousLines is the last alt frame, for repaint-skip.
+	// normal screen. #altPreviousLines is the last alt frame, the base for the
+	// per-row diff (and the repaint-skip).
 	#altActive = false;
 	#altMouseTrackingActive = false;
 	#altPreviousLines: string[] = [];
 	#altEnterWidth = 0;
 	#altEnterHeight = 0;
+	// The normal screen's tracked hardware cursor row at the moment we borrowed
+	// the alt buffer. `\x1b[?1049h`/`l` save and restore the terminal's cursor
+	// around the switch, so the tracker has to revert with it: a `cursor: true`
+	// overlay retargets it to an absolute alt-screen row, and the first paint
+	// back on the normal screen positions relative to #hardwareCursorRow
+	// (#emitUpdate and requestDirectWrite both derive their screen row from
+	// `#hardwareCursorRow - windowTop`). Left pointing at an alt row, that paint
+	// starts from the wrong origin and rewrites the wrong rows.
+	#altEnterHardwareCursorRow = 0;
 	// Holds an alternate-screen exit until its replacement full paint can emit it
 	// atomically. It must survive a deferred Ghostty image frame.
 	#pendingAltExit = "";
@@ -1834,6 +1861,16 @@ export class TUI extends Container {
 			const exitSequence = this.#pendingAltExit || `${mouseExit}${this.#keyboardEnhancementExit()}\x1b[?1049l`;
 			this.terminal.write(exitSequence);
 			setAltScreenActive(false);
+			// `\x1b[?1049l` restores the cursor the terminal saved on entry, so
+			// the tracker must revert with it — the same revert the #doRender
+			// exit performs. A `cursor: true` overlay leaves an ABSOLUTE
+			// alt-screen row in this field, and the teardown math below consumes
+			// it as a normal-screen frame row: left alone, the parent shell's
+			// prompt lands on top of the transcript. The deferred-exit branch
+			// already reverted at decision time, and re-asserting is still
+			// correct there — the normal-screen frames that ran while the exit
+			// was pending painted onto the alt buffer, which this exit discards.
+			this.#hardwareCursorRow = this.#altEnterHardwareCursorRow;
 			this.#altActive = false;
 			this.#altMouseTrackingActive = false;
 			this.#altPreviousLines = [];
@@ -1957,6 +1994,23 @@ export class TUI extends Container {
 			return;
 		}
 		this.#requestOrdinaryRender();
+	}
+
+	/**
+	 * Declare that a continuous pointer gesture is in flight, so the next
+	 * ~{@link TUI.#RENDER_BURST_WINDOW_MS} of paints may run at display rate
+	 * instead of the 30 fps idle cadence.
+	 *
+	 * A scroll gesture is the one case where the cadence *is* the feature: the
+	 * terminal moves its own viewport once per native wheel report (Ghostty
+	 * emits a burst of them per physical notch), so a 30 fps consumer collapses
+	 * that burst into ~9-row jumps while the terminal itself steps 3 rows at a
+	 * time. Callers invoke this once per gesture event, right before requesting
+	 * the render it produced; adaptive backpressure still applies, so an
+	 * expensive frame throttles itself back down.
+	 */
+	beginRenderBurst(): void {
+		this.#renderBurstUntilMs = this.#renderScheduler.now() + TUI.#RENDER_BURST_WINDOW_MS;
 	}
 
 	/**
@@ -2376,7 +2430,10 @@ export class TUI extends Container {
 		}
 		const now = this.#renderScheduler.now();
 		const elapsed = now - this.#lastRenderAt;
-		const cadenceDelay = Math.max(0, TUI.#MIN_RENDER_INTERVAL_MS - elapsed);
+		// A pointer gesture asks for display-rate sampling; everything else
+		// stays on the idle cadence. Backpressure below still governs cost.
+		const cadenceFloor = now < this.#renderBurstUntilMs ? TUI.#RENDER_BURST_INTERVAL_MS : TUI.#MIN_RENDER_INTERVAL_MS;
+		const cadenceDelay = Math.max(0, cadenceFloor - elapsed);
 		// Adaptive backpressure — target ~50% render duty cycle: the next frame
 		// starts no sooner than `last_frame_end + last_frame_cost`, i.e.
 		// `last_frame_start + 2 × last_frame_cost`. So `elapsed` (which counts
@@ -2868,6 +2925,7 @@ export class TUI extends Container {
 		const topOverlay = this.#getTopmostVisibleOverlay();
 		const wantAlt = topOverlay?.options?.fullscreen === true;
 		const wantMouseTracking = wantAlt && topOverlay.options?.mouseTracking !== false;
+		const wantCursor = wantAlt && topOverlay.options?.cursor === true;
 		if (wantAlt && !this.#altActive) {
 			// Enhanced keyboard modes can be buffer-local: re-push the active
 			// modified-key reporting sequence on the freshly entered alternate
@@ -2884,10 +2942,16 @@ export class TUI extends Container {
 			this.#altPreviousLines = [];
 			this.#altEnterWidth = width;
 			this.#altEnterHeight = height;
+			this.#altEnterHardwareCursorRow = this.#hardwareCursorRow;
 		} else if (!wantAlt && this.#altActive) {
 			const mouseExit = this.#altMouseTrackingActive ? MOUSE_TRACKING_OFF : "";
 			const enhancementExit = this.#keyboardEnhancementExit();
-			const exitSequence = `${mouseExit}${enhancementExit}\x1b[?1049l`;
+			// A `cursor: true` overlay leaves the hardware cursor visible, and
+			// DECTCEM is not part of what `\x1b[?1049l` restores. Hide it before
+			// the switch — ahead of the keyboard pop, which must stay adjacent to
+			// the buffer exit — or it survives onto the normal screen.
+			const cursorExit = this.#hardwareCursorVisible ? HIDE_CURSOR : "";
+			const exitSequence = `${cursorExit}${mouseExit}${enhancementExit}\x1b[?1049l`;
 			// Session replacement can finish while a fullscreen selector is still
 			// covering the old normal buffer. Keep the overlay visible until the
 			// replacement is ready, then fuse the buffer restore into that full paint;
@@ -2897,6 +2961,10 @@ export class TUI extends Container {
 				deferredAltExit = exitSequence;
 			} else this.terminal.write(exitSequence);
 			setAltScreenActive(false);
+			// The terminal restores the cursor it saved on entry; restore our
+			// tracking of it too, or a `cursor: true` overlay's absolute alt row
+			// misaligns the first normal-screen paint.
+			this.#hardwareCursorRow = this.#altEnterHardwareCursorRow;
 			this.#forgetHardwareCursorState();
 			this.#altActive = false;
 			this.#altMouseTrackingActive = false;
@@ -2919,7 +2987,7 @@ export class TUI extends Container {
 		}
 		if (this.#altActive) {
 			this.#componentRenderTargets.clear();
-			this.#renderAltFrame(width, height);
+			this.#renderAltFrame(width, height, wantCursor);
 			return;
 		}
 
@@ -4005,25 +4073,45 @@ export class TUI extends Container {
 
 	/**
 	 * Compose and paint a single fullscreen overlay frame on the alt buffer.
-	 * Cursor markers are stripped (the modal draws its own in-band caret and
-	 * keeps the hardware cursor hidden), and only the modal is composited over a
-	 * blank base — the transcript is never touched while the alt buffer is up.
+	 * Only the modal is composited over a blank base — the transcript is never
+	 * touched while the alt buffer is up. Cursor markers are stripped from the
+	 * text either way (they are internal sentinels); `showCursor` — the
+	 * overlay's `cursor: true` — decides whether the bottom-most one also drives
+	 * the hardware cursor, or whether it stays hidden because the modal paints
+	 * its own in-band caret.
 	 */
-	#renderAltFrame(width: number, height: number): void {
+	#renderAltFrame(width: number, height: number, showCursor: boolean): void {
 		const base: string[] = new Array(Math.max(0, height)).fill("");
 		let lines = this.#compositeOverlaysIntoWindow(base, width, height);
-		this.#extractCursorMarkers(lines);
+		const markers = this.#extractCursorMarkers(lines);
 		lines = this.#prepareLinesArray(lines, width);
-		this.#emitAltFrame(lines, width, height);
+		this.#emitAltFrame(lines, width, height, showCursor ? (markers[0] ?? null) : null);
 	}
 
 	/**
-	 * Full per-row viewport rewrite on the alt buffer. Emits only sync-output
-	 * brackets, a cursor home, and per-row rewrites — never ED3, append-tail, or
-	 * any native-scrollback byte, so it is fully isolated from the planner and
-	 * #commit. The hardware cursor stays hidden (it is never re-shown here).
+	 * Paint one alt-buffer frame as a per-row diff against the previous one.
+	 * Emits only sync-output brackets, absolute row positioning and per-row
+	 * rewrites — never ED3, append-tail, or any native-scrollback byte — so it
+	 * stays fully isolated from the planner and #commit.
+	 *
+	 * Every row is rewritten only when the cached frame cannot describe what is
+	 * on screen: a forced repaint (resetDisplay, requestRender(true)) must
+	 * repair a corrupted modal even when our cache is byte-identical, and a
+	 * row-count mismatch means rows we never painted (the first frame after
+	 * entering the alt buffer, or a height change). Otherwise only the rows
+	 * whose text changed are rewritten — a streaming transcript touches a
+	 * handful per frame, so a 30fps stream stops rewriting the whole screen 30
+	 * times a second.
+	 *
+	 * Trade-off: rewriting every row per frame used to heal damage this
+	 * renderer never caused (a stray write from a child process, a terminal
+	 * glitch), because the cache was never consulted. The diff trusts
+	 * #altPreviousLines, so out-of-band damage now survives until a repaint is
+	 * forced — `resetDisplay()` (Ctrl+L), `requestRender(true)`, or anything
+	 * else that sets #forceViewportRepaintOnNextRender, all of which reach the
+	 * `force` branch below and rewrite the whole screen.
 	 */
-	#emitAltFrame(lines: string[], width: number, height: number): void {
+	#emitAltFrame(lines: string[], width: number, height: number, cursorPos: { row: number; col: number } | null): void {
 		const fitted: string[] = new Array(height);
 		for (let r = 0; r < height; r++) fitted[r] = lines[r] ?? "";
 		// Flush queued image-data transmits (`a=t`, no visible output) before the
@@ -4038,31 +4126,114 @@ export class TUI extends Container {
 			for (const seq of imageTransmits) transmitBuffer += seq;
 			this.terminal.write(transmitBuffer);
 		}
-		// Skip an identical repaint (the modal is mostly static between
-		// keystrokes) — unless a forced repaint (resetDisplay,
-		// requestRender(true)) is pending: the redraw gesture must repair a
-		// corrupted modal even when our cached frame is byte-identical.
 		const force = this.#forceViewportRepaintOnNextRender;
 		this.#forceViewportRepaintOnNextRender = false;
-		if (!force && this.#altPreviousLines.length === height) {
-			let same = true;
+		const previous = this.#altPreviousLines;
+		const fullRepaint = force || previous.length !== height;
+		// A null target keeps the cursor hidden: the overlay never asked for one,
+		// nothing published a marker, or hardware cursors are off app-wide and the
+		// focused component paints an in-band caret instead.
+		const target = this.#showHardwareCursor ? this.#targetHardwareCursorState(cursorPos, height) : null;
+		if (!fullRepaint) {
+			let changed = false;
 			for (let r = 0; r < height; r++) {
-				if (fitted[r] !== this.#altPreviousLines[r]) {
-					same = false;
+				if (this.#altRowChanged(fitted[r], previous[r])) {
+					changed = true;
 					break;
 				}
 			}
-			if (same) return;
+			// The modal is mostly static between keystrokes, and a caret walking
+			// along an unchanged line moves nothing but the cursor.
+			if (!changed) {
+				this.#writeAltCursorPosition(target);
+				return;
+			}
 		}
-		let buffer = `${this.#paintBeginSequence}\x1b[H`;
-		for (let r = 0; r < height; r++) {
-			if (r > 0) buffer += "\r\n";
-			buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1);
+		let buffer = this.#paintBeginSequence;
+		if (fullRepaint) {
+			buffer += "\x1b[H";
+			for (let r = 0; r < height; r++) {
+				if (r > 0) buffer += "\r\n";
+				buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1);
+			}
+			this.#fullRedrawCount += 1;
+		} else {
+			// One absolute jump per run of contiguous changed rows, then CRLF
+			// between that run's rows: rewrites always resume at column 1, so the
+			// jump would only repeat what the CRLF already did.
+			let r = 0;
+			while (r < height) {
+				if (!this.#altRowChanged(fitted[r], previous[r])) {
+					r++;
+					continue;
+				}
+				buffer += `\x1b[${r + 1};1H`;
+				let first = true;
+				while (r < height && this.#altRowChanged(fitted[r], previous[r])) {
+					if (!first) buffer += "\r\n";
+					buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1);
+					first = false;
+					r++;
+				}
+			}
 		}
+		// Inside the paint's own synchronized block: a standalone cursor frame
+		// would flicker between the content and the caret.
+		buffer += this.#altCursorSequence(target);
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 		this.#altPreviousLines = fitted;
-		this.#fullRedrawCount += 1;
+		if (target) this.#recordHardwareCursorState(target);
+		else this.#recordHardwareCursorHidden();
+	}
+
+	/**
+	 * Whether an alt-buffer row has to be rewritten this frame. Text equality
+	 * decides for ordinary rows, but an image row's bytes are not a function of
+	 * its text: #prepareLine passes image lines through verbatim, while
+	 * #lineRewriteSequence resolves them against live placement state — the
+	 * epoch that names the placement id, the registered pixel geometry — and
+	 * the screen row. Repeated text can therefore still owe the terminal new
+	 * placement bytes, and skipping the row strands the image on whatever the
+	 * last emitted placement said until the next full repaint. Re-emitting is
+	 * exactly what the pre-diff whole-screen rewrite did for these rows.
+	 *
+	 * Equal text is the same string, so one check covers both sides; a row that
+	 * gains or loses an image differs textually and is caught by the compare.
+	 */
+	#altRowChanged(line: string, previous: string): boolean {
+		return line !== previous || TERMINAL.isImageLine(line);
+	}
+
+	/**
+	 * Cursor bytes for an alt frame. The alt buffer is a fixed screen with no
+	 * windowTop, so this positions absolutely rather than reusing
+	 * #cursorControlSequence, whose relative moves are anchored to the normal
+	 * screen's tracked row. Painting content leaves the cursor wherever the last
+	 * rewritten row ended (and #paintBeginSequence hides it), so a visible
+	 * target is always re-positioned; only the hide is deduplicated.
+	 */
+	#altCursorSequence(target: HardwareCursorState | null): string {
+		if (target) return `\x1b[${target.row + 1};${target.col + 1}H\x1b[?25h`;
+		return this.#isHiddenCursorKnown() ? "" : HIDE_CURSOR;
+	}
+
+	/**
+	 * Move the alt-screen hardware cursor on a frame that paints no content, as
+	 * #writeCursorPosition does for the normal screen. Nothing else writes to
+	 * the alt buffer, so the tracked state is exactly where the cursor sits and
+	 * an unchanged target emits no bytes at all.
+	 */
+	#writeAltCursorPosition(target: HardwareCursorState | null): void {
+		if (!target) {
+			if (this.#isHiddenCursorKnown()) return;
+			this.terminal.hideCursor();
+			this.#recordHardwareCursorHidden();
+			return;
+		}
+		if (this.#sameHardwareCursorState(target)) return;
+		this.terminal.write(`${this.#cursorBeginSequence}${this.#altCursorSequence(target)}${this.#cursorEndSequence}`);
+		this.#recordHardwareCursorState(target);
 	}
 
 	/**
