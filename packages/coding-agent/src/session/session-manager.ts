@@ -18,6 +18,7 @@ import {
 	stringifyJson,
 	toError,
 } from "@oh-my-pi/pi-utils";
+import { isSettingsInitialized, settings } from "../config/settings";
 import type { StructuredSubagentSchemaMode } from "../task/types";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
@@ -30,6 +31,7 @@ import {
 	type PythonExecutionMessage,
 	sanitizeRehydratedOpenAIResponsesAssistantMessage,
 	stripInternalDetailsFields,
+	textFromContent,
 } from "./messages";
 import { type BuildSessionContextOptions, buildSessionContext, type SessionContext } from "./session-context";
 import {
@@ -68,6 +70,7 @@ import {
 	writeTerminalBreadcrumb,
 } from "./session-paths";
 import { prepareEntryForPersistence } from "./session-persistence";
+import { SessionSearchIndex } from "./session-search-index";
 import {
 	FileSessionStorage,
 	MemorySessionStorage,
@@ -2056,7 +2059,49 @@ export class SessionManager {
 	): string {
 		const entry: SessionMessageEntry = { type: "message", ...this.#freshEntryFields(), message };
 		this.#recordEntry(entry);
+		this.#indexForSearch(message, entry.id);
 		return entry.id;
+	}
+
+	/**
+	 * Feed conversation text into the cross-session search index backing the
+	 * `session_search` tool.
+	 *
+	 * Runs after {@link #recordEntry} so a latched persistence failure throws
+	 * first — nothing reaches the index that never reached the JSONL. Only
+	 * `user`/`assistant` text is indexed: tool and custom payloads dominate a
+	 * transcript by volume and bury the conversation that makes a session
+	 * findable. Non-persisted managers (in-memory sessions, test doubles) have
+	 * no durable transcript to point a search hit at, so they are skipped.
+	 *
+	 * Settings arrive through the global singleton rather than a constructor
+	 * option: this class is deliberately settings-free (six static factories,
+	 * several of whose callers — `createEmptySessionFile`, session listing —
+	 * hold no `Settings`), and `isSettingsInitialized` is the established
+	 * accessor for exactly that case.
+	 */
+	#indexForSearch(
+		message:
+			| Message
+			| CustomMessage
+			| HookMessage
+			| BashExecutionMessage
+			| PythonExecutionMessage
+			| FileMentionMessage,
+		entryId: string,
+	): void {
+		if (!this.#persist || !this.#sessionId) return;
+		if (message.role !== "user" && message.role !== "assistant") return;
+		if (!isSettingsInitialized() || !settings.get("sessionSearch.enabled")) return;
+		const text = textFromContent(message.content);
+		if (!text) return;
+		try {
+			SessionSearchIndex.open().indexMessage(this.#sessionId, message.role, text, entryId);
+		} catch (error) {
+			// A search index that cannot open (read-only home, corrupt db) must
+			// never take down the append path that just persisted the turn.
+			logger.warn("Session search indexing failed", { error: String(error) });
+		}
 	}
 
 	/**

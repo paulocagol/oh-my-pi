@@ -139,7 +139,11 @@ export function didSessionMessagesChange(previousMessages: AgentMessage[], nextM
 	);
 }
 
-function textFromContent(content: unknown): string {
+/**
+ * Plain text of a message's content: the string itself, or the concatenated
+ * `text` blocks. Non-text blocks (images, tool calls, thinking) are dropped.
+ */
+export function textFromContent(content: unknown): string {
 	if (typeof content === "string") return content.trim();
 	if (!Array.isArray(content)) return "";
 	const parts: string[] = [];
