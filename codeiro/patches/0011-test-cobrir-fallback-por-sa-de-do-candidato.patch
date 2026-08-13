@@ -1,7 +1,7 @@
-From 69cca52071a6153292285f3ffd72514f579e129c Mon Sep 17 00:00:00 2001
+From 96de8949262879523860caefdfc7260a994e8aec Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 08:14:41 -0300
-Subject: [PATCH 11/25] =?UTF-8?q?test:=20cobrir=20fallback=20por=20sa?=
+Subject: [PATCH 11/26] =?UTF-8?q?test:=20cobrir=20fallback=20por=20sa?=
  =?UTF-8?q?=C3=BAde=20do=20candidato?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -12,10 +12,10 @@ Content-Transfer-Encoding: 8bit
  1 file changed, 63 insertions(+)
 
 diff --git a/packages/coding-agent/test/agent-session-retry-fallback.test.ts b/packages/coding-agent/test/agent-session-retry-fallback.test.ts
-index e5784c9814..9e9b11c8d8 100644
+index cd39c4aa66..ed08388542 100644
 --- a/packages/coding-agent/test/agent-session-retry-fallback.test.ts
 +++ b/packages/coding-agent/test/agent-session-retry-fallback.test.ts
-@@ -3891,6 +3891,69 @@ describe("AgentSession retry fallback", () => {
+@@ -4135,6 +4135,69 @@ describe("AgentSession retry fallback", () => {
  		expect(session.model?.id).toBe(compatibleFallback.id);
  	});
  

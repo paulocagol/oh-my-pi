@@ -1,7 +1,7 @@
-From c2379d3bdba06bbfc4a2db7e5b2beeb46162ffa5 Mon Sep 17 00:00:00 2001
+From 71214edfcc66d0ba3033b7589f6eda2c03027ea1 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 15:20:41 -0300
-Subject: [PATCH 18/25] feat: reconhecer install codeiro-omp e rebuildar quando
+Subject: [PATCH 18/26] feat: reconhecer install codeiro-omp e rebuildar quando
  a serie muda
 
 ---
@@ -218,10 +218,10 @@ index 543f9280b1..f8dafb1417 100644
  	console.log(chalk.green(`\n${theme.status.success} Updated to ${release.version} (source build)`));
  	console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
 diff --git a/packages/coding-agent/src/cli/update-cli.ts b/packages/coding-agent/src/cli/update-cli.ts
-index 298521310f..59dc5933c3 100644
+index 857993aa4a..062bd3cd1b 100644
 --- a/packages/coding-agent/src/cli/update-cli.ts
 +++ b/packages/coding-agent/src/cli/update-cli.ts
-@@ -15,7 +15,12 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
+@@ -16,7 +16,12 @@ import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
  import { $ } from "bun";
  import { theme } from "../modes/theme/theme";
  import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
@@ -235,7 +235,7 @@ index 298521310f..59dc5933c3 100644
  
  const REPO = "can1357/oh-my-pi";
  const PACKAGE = "@oh-my-pi/pi-coding-agent";
-@@ -1368,6 +1373,22 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
+@@ -1617,6 +1622,22 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
  		return;
  	}
  

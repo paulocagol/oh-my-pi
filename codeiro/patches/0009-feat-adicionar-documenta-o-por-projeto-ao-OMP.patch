@@ -1,7 +1,7 @@
-From 2001b83f17296061650cc1c190819141c446bb75 Mon Sep 17 00:00:00 2001
+From 981e575147a9eba05f10eb5074ec6d1d91e5981a Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Tue, 11 Aug 2026 21:41:38 -0300
-Subject: [PATCH 09/25] =?UTF-8?q?feat:=20adicionar=20documenta=C3=A7=C3=A3?=
+Subject: [PATCH 09/26] =?UTF-8?q?feat:=20adicionar=20documenta=C3=A7=C3=A3?=
  =?UTF-8?q?o=20por=20projeto=20ao=20OMP?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -31,7 +31,7 @@ Content-Transfer-Encoding: 8bit
  create mode 100644 packages/coding-agent/test/tools/grep-project-docs.test.ts
 
 diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
-index b387e76fd5..42379e5878 100644
+index d0b7ec6954..e679536a02 100644
 --- a/packages/coding-agent/CHANGELOG.md
 +++ b/packages/coding-agent/CHANGELOG.md
 @@ -1,6 +1,7 @@
@@ -40,7 +40,7 @@ index b387e76fd5..42379e5878 100644
  ## [Unreleased]
 +- Added per-project Markdown documentation catalogs via `.omp/project-docs.json`, exposed through validated project URL schemes such as `vitrine.se://` for `read`, `grep`, autocomplete, and prompt discovery.
  
- ## [17.2.15] - 2026-08-12
+ ## [17.3.1] - 2026-08-13
  
 diff --git a/packages/coding-agent/src/cli/read-cli.ts b/packages/coding-agent/src/cli/read-cli.ts
 index c6fd24f389..21df4dda1b 100644
@@ -452,10 +452,10 @@ index 0000000000..ef414949ff
 +export { loadProjectDocsManifest } from "./project-docs-manifest";
 +export { ProjectDocsProtocolHandler } from "./project-docs-protocol";
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 8872c5570a..1d56f345cf 100644
+index 4a8f65cee9..5da8f2115b 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -56,6 +56,7 @@ import { loadExtensions } from "./extensibility/extensions/loader";
+@@ -57,6 +57,7 @@ import { loadExtensions } from "./extensibility/extensions/loader";
  import { ExtensionRunner } from "./extensibility/extensions/runner";
  import type { ExtensionUIContext } from "./extensibility/extensions/types";
  import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
@@ -463,7 +463,7 @@ index 8872c5570a..1d56f345cf 100644
  import { registerDaemonProjectPresence } from "./launch/presence";
  import type { MCPManager } from "./mcp";
  import { InteractiveMode } from "./modes/interactive-mode";
-@@ -678,6 +679,7 @@ async function switchToResumedProject(
+@@ -689,6 +690,7 @@ async function switchToResumedProject(
  	clearPluginRootsAndCaches();
  	resetCapabilities();
  	const cwd = getProjectDir();
@@ -472,7 +472,7 @@ index 8872c5570a..1d56f345cf 100644
  	// destination preload so sync consumers (plugin-provided LSP/DAP config) never
  	// read the launch project's stale/empty roots during session creation.
 diff --git a/packages/coding-agent/src/modes/interactive-mode.ts b/packages/coding-agent/src/modes/interactive-mode.ts
-index 66bb5bccb1..c8bd971c99 100644
+index 88c0d14dcd..8c5c739698 100644
 --- a/packages/coding-agent/src/modes/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive-mode.ts
 @@ -81,7 +81,14 @@ import type { CompactOptions } from "../extensibility/extensions/types";
@@ -491,7 +491,7 @@ index 66bb5bccb1..c8bd971c99 100644
  import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
  import type { MCPManager } from "../mcp";
  import {
-@@ -1384,6 +1391,7 @@ export class InteractiveMode implements InteractiveModeContext {
+@@ -1396,6 +1403,7 @@ export class InteractiveMode implements InteractiveModeContext {
  		await this.refreshSkillState();
  		await this.refreshSlashCommandState(newCwd);
  		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
@@ -500,7 +500,7 @@ index 66bb5bccb1..c8bd971c99 100644
  	}
  
 diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
-index 58fe60192d..2d1adc0613 100644
+index ad26d0f2b8..e69f7ff11e 100644
 --- a/packages/coding-agent/src/prompts/system/system-prompt.md
 +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
 @@ -66,9 +66,14 @@ Most FS/bash tools auto-resolve these to FS paths.
@@ -521,7 +521,7 @@ index 58fe60192d..2d1adc0613 100644
  {{#if toolInfo.length}}
  {{#if toolListMode}}
 diff --git a/packages/coding-agent/src/sdk.ts b/packages/coding-agent/src/sdk.ts
-index 5bfaae569f..9ea60c97c7 100644
+index 65f3f5acda..0385add086 100644
 --- a/packages/coding-agent/src/sdk.ts
 +++ b/packages/coding-agent/src/sdk.ts
 @@ -104,7 +104,12 @@ import {
@@ -538,7 +538,7 @@ index 5bfaae569f..9ea60c97c7 100644
  import { setSharedLspEnabled } from "./lsp/client";
  import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
  import {
-@@ -1231,6 +1236,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+@@ -1232,6 +1237,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
  
  async function createAgentSessionScoped(options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> {
  	const cwd = options.cwd ?? getProjectDir();
@@ -546,7 +546,7 @@ index 5bfaae569f..9ea60c97c7 100644
  	const agentDir = options.agentDir ?? getAgentDir();
  	const eventBus = options.eventBus ?? new EventBus();
  
-@@ -2810,6 +2816,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
+@@ -2811,6 +2817,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
  			tools: Map<string, AgentTool>,
  		): Promise<BuildSystemPromptResult> => {
  			const promptCwd = sessionManager.getCwd();
@@ -554,7 +554,7 @@ index 5bfaae569f..9ea60c97c7 100644
  			const activeRepoContext = hasSession
  				? await logger.time("resolveActiveRepoContext", resolveRepoContext, promptCwd)
  				: initialActiveRepoContext;
-@@ -2927,6 +2934,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
+@@ -2928,6 +2935,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
  				personality: agentKind === "sub" ? "none" : settings.get("personality"),
  				renderMermaid: settings.get("tui.renderMermaid"),
  				activeRepoContext,
@@ -563,7 +563,7 @@ index 5bfaae569f..9ea60c97c7 100644
  
  			if (options.systemPrompt === undefined) {
 diff --git a/packages/coding-agent/src/slash-commands/builtin-lifecycle.ts b/packages/coding-agent/src/slash-commands/builtin-lifecycle.ts
-index 5c999ce5e3..6d651e7c0c 100644
+index 8095879e29..0cfb1b3915 100644
 --- a/packages/coding-agent/src/slash-commands/builtin-lifecycle.ts
 +++ b/packages/coding-agent/src/slash-commands/builtin-lifecycle.ts
 @@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";

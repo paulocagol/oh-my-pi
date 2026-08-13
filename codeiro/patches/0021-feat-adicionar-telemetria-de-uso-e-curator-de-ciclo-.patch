@@ -1,7 +1,7 @@
-From a2c28604e3c5c61a2c72f5219b82c5efdf1e1f53 Mon Sep 17 00:00:00 2001
+From 4fda736d1ef7c1f49002c910a222273468208497 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Thu, 13 Aug 2026 08:44:00 -0300
-Subject: [PATCH 21/25] feat: adicionar telemetria de uso e curator de ciclo de
+Subject: [PATCH 21/26] feat: adicionar telemetria de uso e curator de ciclo de
  vida para skills do autolearn
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -55,7 +55,7 @@ completa em .claude/analyses/2026-08-13-hermes-vs-codeiro-omp.md.
  create mode 100644 packages/coding-agent/test/autolearn/skill-usage.test.ts
 
 diff --git a/docs/settings.md b/docs/settings.md
-index 4f17913117..3040822f4e 100644
+index d23c928050..63cc1c3a96 100644
 --- a/docs/settings.md
 +++ b/docs/settings.md
 @@ -635,6 +635,8 @@ memory:
@@ -91,7 +91,7 @@ index d066bdd58f..d7fe2a1343 100644
  
  `loadSkills()` applies these controls:
 diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
-index 3dd4b287cc..bf5a4201fa 100644
+index ffe871f686..f963b01282 100644
 --- a/packages/coding-agent/CHANGELOG.md
 +++ b/packages/coding-agent/CHANGELOG.md
 @@ -5,6 +5,7 @@
@@ -100,7 +100,7 @@ index 3dd4b287cc..bf5a4201fa 100644
  - Fixed fullscreen transcript wheel scrolling discarding Ghostty's accelerated burst: each native SGR wheel report now retains the terminal's default three-row discrete delta instead of being reduced to one row when reports arrive within the same burst, and each report opens a display-rate render window so a fast spin paints one frame per report instead of landing as a few large jumps. Measured over a 450 ms gesture of 50 native reports: 14 paints moving a median of 11 rows each before, 49 paints moving a median of 3 rows each after — the smoothness costs ~3.5x the bytes for the duration of the gesture, bounded by the alt-screen per-line diff and the engine's adaptive backpressure.
 +- Added usage telemetry and an automatic lifecycle for auto-learn managed skills. Injecting an `omp-managed` skill into a turn (slash command, ACP, RPC, or autoload) now records a use count and timestamp in `~/.omp/agent/managed-skills/usage.json`; discovery alone never counts, and authored skills are never recorded. When `autolearn.enabled` is on, each top-level session start runs one non-blocking curation pass: a skill is only ever judged on a pass after the one that first observed it, a never-used skill inside the stale window is left alone, and otherwise `lastUsedAt ?? createdAt` older than `autolearn.curator.archiveAfterDays` (default 90) moves the skill to `managed-skills/.archive/` — out of discovery, reversible with one move — while older than `autolearn.curator.staleAfterDays` (default 30) only flags it. Using a stale skill again reactivates it. Passes that change something append one developer message naming what moved.
  
- ## [17.2.15] - 2026-08-12
+ ## [17.3.1] - 2026-08-13
  
 diff --git a/packages/coding-agent/src/autolearn/curator.ts b/packages/coding-agent/src/autolearn/curator.ts
 new file mode 100644
@@ -505,10 +505,10 @@ index 0000000000..2fd16c1809
 +	});
 +}
 diff --git a/packages/coding-agent/src/config/settings-schema.ts b/packages/coding-agent/src/config/settings-schema.ts
-index 000f5cef3b..9c6ceab241 100644
+index 95325f2c27..56c6214550 100644
 --- a/packages/coding-agent/src/config/settings-schema.ts
 +++ b/packages/coding-agent/src/config/settings-schema.ts
-@@ -2675,6 +2675,10 @@ export const SETTINGS_SCHEMA = {
+@@ -2666,6 +2666,10 @@ export const SETTINGS_SCHEMA = {
  	},
  	// Config-file-only knob (numbers without `options` are hidden from the UI).
  	"autolearn.minToolCalls": { type: "number", default: 5 },
@@ -579,7 +579,7 @@ index 0000000000..87862b6eab
 +No action needed. Restoring an archived skill is a move back out of `.archive/`.
 +</system-reminder>
 diff --git a/packages/coding-agent/src/sdk.ts b/packages/coding-agent/src/sdk.ts
-index 9ea60c97c7..31c3813ed2 100644
+index 0385add086..e2d9eebe72 100644
 --- a/packages/coding-agent/src/sdk.ts
 +++ b/packages/coding-agent/src/sdk.ts
 @@ -39,6 +39,7 @@ import {
@@ -590,7 +590,7 @@ index 9ea60c97c7..31c3813ed2 100644
  import { createAutoresearchExtension } from "./autoresearch";
  import { loadCapability } from "./capability";
  import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
-@@ -3828,6 +3829,31 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
+@@ -3833,6 +3834,31 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
  					settings,
  					capture: content => session.runAutolearnCapture(signal => runAutoLearnCapture(content, signal)),
  				});
@@ -952,7 +952,7 @@ index 0000000000..288ff61dd2
 +	});
 +});
 diff --git a/packages/coding-agent/test/sdk-autolearn-active-tools.test.ts b/packages/coding-agent/test/sdk-autolearn-active-tools.test.ts
-index 6dd5201071..3e77b4b6fe 100644
+index 17a157f41e..a6bb019d6a 100644
 --- a/packages/coding-agent/test/sdk-autolearn-active-tools.test.ts
 +++ b/packages/coding-agent/test/sdk-autolearn-active-tools.test.ts
 @@ -10,6 +10,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
@@ -963,9 +963,9 @@ index 6dd5201071..3e77b4b6fe 100644
  
  // Guards the auto-learn tool ACTIVATION wiring in createAgentSession: createTools
  // force-includes manage_skill into the built registry for an enabled top-level
-@@ -24,9 +25,17 @@ describe("createAgentSession auto-learn tool activation", () => {
- 	let modelRegistry: ModelRegistry;
- 	const sessions: AgentSession[] = [];
+@@ -36,9 +37,17 @@ describe("createAgentSession auto-learn tool activation", () => {
+ 		};
+ 	}
  
 +	let originalAgentDir: string;
 +
@@ -981,9 +981,9 @@ index 6dd5201071..3e77b4b6fe 100644
  		authStorage = await AuthStorage.create(path.join(registryDir, "auth.db"));
  		modelRegistry = new ModelRegistry(authStorage);
  	});
-@@ -34,6 +43,7 @@ describe("createAgentSession auto-learn tool activation", () => {
+@@ -46,6 +55,7 @@ describe("createAgentSession auto-learn tool activation", () => {
  	afterAll(async () => {
- 		for (const session of sessions) await session.dispose().catch(() => {});
+ 		await Promise.all(sessions.map(session => session.dispose().catch(() => {})));
  		authStorage.close();
 +		setAgentDir(originalAgentDir);
  		if (fs.existsSync(registryDir)) removeSyncWithRetries(registryDir);

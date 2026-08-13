@@ -1,7 +1,7 @@
-From f87ec24f773e74f25372fb7c3ec47532cc34d13a Mon Sep 17 00:00:00 2001
+From daa83a56b389dd2334463b48a2644a1cd8558182 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 08:18:19 -0300
-Subject: [PATCH 12/25] =?UTF-8?q?fix:=20corrigir=20resolu=C3=A7=C3=A3o=20d?=
+Subject: [PATCH 12/26] =?UTF-8?q?fix:=20corrigir=20resolu=C3=A7=C3=A3o=20d?=
  =?UTF-8?q?a=20documenta=C3=A7=C3=A3o=20do=20projeto?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -13,7 +13,7 @@ Content-Transfer-Encoding: 8bit
  2 files changed, 5 insertions(+), 12 deletions(-)
 
 diff --git a/packages/coding-agent/src/modes/interactive-mode.ts b/packages/coding-agent/src/modes/interactive-mode.ts
-index c8bd971c99..3448f28b6d 100644
+index 8c5c739698..241d7dc3c7 100644
 --- a/packages/coding-agent/src/modes/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive-mode.ts
 @@ -81,14 +81,8 @@ import type { CompactOptions } from "../extensibility/extensions/types";
@@ -33,7 +33,7 @@ index c8bd971c99..3448f28b6d 100644
  import type { MCPManager } from "../mcp";
  import {
 diff --git a/packages/coding-agent/src/prompts/system/system-prompt.md b/packages/coding-agent/src/prompts/system/system-prompt.md
-index ce88e724db..94d755f45e 100644
+index 17cdfdb09c..5aa1aebc39 100644
 --- a/packages/coding-agent/src/prompts/system/system-prompt.md
 +++ b/packages/coding-agent/src/prompts/system/system-prompt.md
 @@ -66,13 +66,12 @@ Most FS/bash tools auto-resolve these to FS paths.

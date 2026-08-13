@@ -1,0 +1,93 @@
+From 2382ebd9d7de1d75775d08e919c6a0595d1c0d1d Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Thu, 13 Aug 2026 17:26:08 -0300
+Subject: [PATCH 26/26] fix: acompanhar o rename de sweepStaleBackups no
+ upstream
+
+A v17.3.1 renomeou `sweepStaleBackups` para `sweepStaleUpdateArtifacts`. O rebase
+aplicou nosso hunk como texto - a dep injetada continuava com o nome antigo, que
+nao existe mais, e so o typecheck pegou. Migrado nos tres pontos: a interface
+`CodeiroUpdateDeps`, a chamada do source-update e o objeto passado pelo
+update-cli.
+
+A recusa do updater oficial contra um install do fork passa a apontar
+`/omp-update`, no lugar de mandar rodar `omp update` do runtime forkado - o mesmo
+motivo do banner: o comando cru nao produz a release enquanto a serie nao mover.
+---
+ packages/coding-agent/src/cli/codeiro-source-update.ts   | 4 ++--
+ packages/coding-agent/src/cli/update-cli.ts              | 9 +++++++--
+ packages/coding-agent/test/codeiro-source-update.test.ts | 2 +-
+ 3 files changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/packages/coding-agent/src/cli/codeiro-source-update.ts b/packages/coding-agent/src/cli/codeiro-source-update.ts
+index fb888910a9..735449f2d2 100644
+--- a/packages/coding-agent/src/cli/codeiro-source-update.ts
++++ b/packages/coding-agent/src/cli/codeiro-source-update.ts
+@@ -118,7 +118,7 @@ export interface CodeiroUpdateDeps {
+ 	isMuslLinux(): boolean;
+ 	verifyBinaryAtPath(binaryPath: string, expectedVersion: string): Promise<InstalledVersionVerification>;
+ 	replaceBinaryForUpdate(options: BinaryReplacementOptions): Promise<InstalledVersionVerification>;
+-	sweepStaleBackups(targetPath: string): Promise<void>;
++	sweepStaleUpdateArtifacts(targetPath: string): Promise<void>;
+ }
+ 
+ function manifestError(source: string, detail: string): Error {
+@@ -1039,7 +1039,7 @@ async function installBuiltBinary(
+ 		expectedVersion: release.version,
+ 		verifyInstalledVersion: expectedVersion => deps.verifyBinaryAtPath(targetPath, expectedVersion),
+ 	});
+-	await deps.sweepStaleBackups(targetPath);
++	await deps.sweepStaleUpdateArtifacts(targetPath);
+ }
+ 
+ /**
+diff --git a/packages/coding-agent/src/cli/update-cli.ts b/packages/coding-agent/src/cli/update-cli.ts
+index d8eb2b4199..2f683776b5 100644
+--- a/packages/coding-agent/src/cli/update-cli.ts
++++ b/packages/coding-agent/src/cli/update-cli.ts
+@@ -22,6 +22,7 @@ import {
+ 	loadCodeiroInstall,
+ 	resolveManifestCandidates,
+ 	runCodeiroSourceUpdate,
++	SERIES_REBASE_COMMAND,
+ } from "./codeiro-source-update";
+ 
+ const REPO = "can1357/oh-my-pi";
+@@ -1584,7 +1585,7 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
+ 				install: codeiroInstall,
+ 				force: opts.force,
+ 				check: opts.check,
+-				deps: { isMuslLinux, verifyBinaryAtPath, replaceBinaryForUpdate, sweepStaleBackups },
++				deps: { isMuslLinux, verifyBinaryAtPath, replaceBinaryForUpdate, sweepStaleUpdateArtifacts },
+ 			});
+ 		} catch (err) {
+ 			// An aborted series already printed its verdict block in full;
+@@ -1637,7 +1638,11 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
+ 				`Refusing to update: ${targetInstall.binaryPath} is a ${CODEIRO_DISTRIBUTION} install (${targetInstall.manifestPath}).`,
+ 			),
+ 		);
+-		console.error(chalk.dim("Run `omp update` from the fork-selected runtime to rebuild the patched source tree."));
++		console.error(
++			chalk.dim(
++				`Run ${SERIES_REBASE_COMMAND} inside the agent: it rebases the patch series onto the new tag and then rebuilds this install from source.`,
++			),
++		);
+ 		process.exit(1);
+ 	}
+ 
+diff --git a/packages/coding-agent/test/codeiro-source-update.test.ts b/packages/coding-agent/test/codeiro-source-update.test.ts
+index 616176ee47..bda9acfec0 100644
+--- a/packages/coding-agent/test/codeiro-source-update.test.ts
++++ b/packages/coding-agent/test/codeiro-source-update.test.ts
+@@ -695,7 +695,7 @@ describe("runCodeiroSourceUpdate --check", () => {
+ 			replaceBinaryForUpdate: () => {
+ 				throw new Error("check must not replace the binary");
+ 			},
+-			sweepStaleBackups: () => {
++			sweepStaleUpdateArtifacts: () => {
+ 				throw new Error("check must not touch the install directory");
+ 			},
+ 		};
+-- 
+2.55.0
+

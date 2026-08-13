@@ -1,4 +1,4 @@
-# base: v17.2.15
+# base: v17.3.1
 0001-feat-backend-source-build-opt-in-no-updater-via-code.patch
 0002-fix-preservar-artefato-e-addon-no-update-por-fonte.patch
 0003-fix-limpar-valida-o-do-source-updater.patch
@@ -24,3 +24,4 @@
 0023-fix-aviso-de-release-nova-n-o-manda-rodar-update-que.patch
 0024-feat-curar-drift-do-apply-e-entregar-veredito-aciona.patch
 0025-feat-resolver-bun-fora-do-PATH-e-apontar-o-update-pa.patch
+0026-fix-acompanhar-o-rename-de-sweepStaleBackups-no-upst.patch

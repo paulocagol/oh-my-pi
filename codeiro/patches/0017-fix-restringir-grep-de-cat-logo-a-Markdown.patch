@@ -1,7 +1,7 @@
-From e43cae7df06188fb80c1b21b80416d352f0b1537 Mon Sep 17 00:00:00 2001
+From c52122742e90099520f87a1bf18f3a776e1c0880 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 12:37:57 -0300
-Subject: [PATCH 17/25] =?UTF-8?q?fix:=20restringir=20grep=20de=20cat=C3=A1?=
+Subject: [PATCH 17/26] =?UTF-8?q?fix:=20restringir=20grep=20de=20cat=C3=A1?=
  =?UTF-8?q?logo=20a=20Markdown?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -130,18 +130,18 @@ index d8076a8bce..7b683be704 100644
  				immutableSourcePaths.add(path.resolve(resource.sourcePath));
  			}
 diff --git a/packages/coding-agent/test/cli/grep-internal-url.test.ts b/packages/coding-agent/test/cli/grep-internal-url.test.ts
-index f2490b5b4f..4ba600bcb5 100644
+index fc278d24a7..0b240ca8f7 100644
 --- a/packages/coding-agent/test/cli/grep-internal-url.test.ts
 +++ b/packages/coding-agent/test/cli/grep-internal-url.test.ts
 @@ -8,6 +8,7 @@ import { GrepOutputMode } from "@oh-my-pi/pi-natives";
- import { setProjectDir } from "@oh-my-pi/pi-utils";
+ import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
  import { type GrepCommandArgs, runGrepCommand } from "../../src/cli/grep-cli";
  import { runInternalUrlGrep } from "../../src/cli/grep-internal-url";
 +import { shouldDiscoverMcp } from "../../src/cli/read-cli";
  import { initTheme } from "../../src/modes/theme/theme";
  
- interface Run {
-@@ -87,6 +88,8 @@ describe("omp grep internal-URL branch", () => {
+ /** Captured before any test chdirs away from it. */
+@@ -90,6 +91,8 @@ describe("omp grep internal-URL branch", () => {
  		);
  		await Bun.write(path.join(root, "docs", "index.md"), "nothing here\n");
  		await Bun.write(path.join(root, "docs", "nested", "guide.md"), "nested needle\n");
@@ -150,7 +150,7 @@ index f2490b5b4f..4ba600bcb5 100644
  		await Bun.write(path.join(root, "outside.md"), "needle outside the catalog\n");
  		setProjectDir(root);
  		await initTheme();
-@@ -110,6 +113,9 @@ describe("omp grep internal-URL branch", () => {
+@@ -118,6 +121,9 @@ describe("omp grep internal-URL branch", () => {
  		expect(result.out).toContain("guide.md");
  		// `outside.md` sits in the repo but outside the catalog root.
  		expect(result.out).not.toContain("outside the catalog");
@@ -160,7 +160,7 @@ index f2490b5b4f..4ba600bcb5 100644
  		// The native summary belongs to the other branch and must not appear.
  		expect(result.out).not.toContain("Files searched:");
  	});
-@@ -155,6 +161,7 @@ describe("omp grep internal-URL branch", () => {
+@@ -163,6 +169,7 @@ describe("omp grep internal-URL branch", () => {
  
  		for (const [label, cmd] of [
  			["--glob", args({ path: "vitrine.se://", glob: "*.md" })],
@@ -168,7 +168,7 @@ index f2490b5b4f..4ba600bcb5 100644
  			["--count", args({ path: "vitrine.se://", mode: GrepOutputMode.Count })],
  			["--files", args({ path: "vitrine.se://", mode: GrepOutputMode.FilesWithMatches })],
  		] as const) {
-@@ -204,4 +211,8 @@ describe("omp grep internal-URL branch", () => {
+@@ -212,4 +219,8 @@ describe("omp grep internal-URL branch", () => {
  		expect(rejected.exits).toEqual([1]);
  		expect(rejected.err).toContain("must be an integer");
  	});

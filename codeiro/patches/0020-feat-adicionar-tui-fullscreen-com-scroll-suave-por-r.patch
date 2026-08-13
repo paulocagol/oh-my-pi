@@ -1,7 +1,7 @@
-From ea9a263af0fdb2dc475b1b5217772ea6db86815f Mon Sep 17 00:00:00 2001
+From 3aa7096990743843636758064f0372e6007970d5 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 21:33:06 -0300
-Subject: [PATCH 20/25] feat: adicionar /tui fullscreen com scroll suave por
+Subject: [PATCH 20/26] feat: adicionar /tui fullscreen com scroll suave por
  report SGR
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -19,17 +19,17 @@ Corrige o scroll descartando a rajada acelerada do Ghostty: cada report SGR nati
  packages/coding-agent/src/modes/types.ts      |   1 +
  .../src/slash-commands/builtin-control.ts     |  14 +
  .../primary-transcript-fullscreen.test.ts     | 364 ++++++++++
- packages/tui/CHANGELOG.md                     |  10 +
+ packages/tui/CHANGELOG.md                     |   9 +
  packages/tui/src/tui.ts                       | 229 ++++++-
  .../test/adaptive-render-backpressure.test.ts |  61 ++
  .../tui/test/alt-screen-live-surface.test.ts  | 628 ++++++++++++++++++
- 12 files changed, 1816 insertions(+), 30 deletions(-)
+ 12 files changed, 1815 insertions(+), 30 deletions(-)
  create mode 100644 packages/coding-agent/src/modes/components/primary-transcript-fullscreen.ts
  create mode 100644 packages/coding-agent/test/primary-transcript-fullscreen.test.ts
  create mode 100644 packages/tui/test/alt-screen-live-surface.test.ts
 
 diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
-index 57e8061f9e..3dd4b287cc 100644
+index 5f16e51eb1..ffe871f686 100644
 --- a/packages/coding-agent/CHANGELOG.md
 +++ b/packages/coding-agent/CHANGELOG.md
 @@ -3,6 +3,8 @@
@@ -39,7 +39,7 @@ index 57e8061f9e..3dd4b287cc 100644
 +- Added `/tui fullscreen`, a Claude Code-style alternate-screen surface for the live primary transcript: the editor and a hint/status footer stay pinned at the bottom while the transcript scrolls above them with `PgUp`/`PgDn`, `Shift+PgUp`/`Shift+PgDn` (jump prompt to prompt), `Ctrl+Home`/`Ctrl+End`, and the mouse wheel. A sticky header names the user prompt whose section is on screen and snaps back to it when clicked, the viewport stays anchored to that prompt while blocks above it keep streaming, and the footer reports how many rows arrived since auto-follow paused. The surface keeps the rest of the interactive chrome alive between the transcript and the editor — working loader, token/cost readout, todo and subagent HUDs, error banners, pending messages, and hook widgets — so a streaming turn looks the same as it does in the default renderer, and it reserves the scrollbar column at all times so crossing one screenful never reflows the transcript by a column. `/tui default` (or `/tui close`) restores the native-scrollback renderer and `/tui status` reports the active mode; the preference applies to the current session only.
 +- Fixed fullscreen transcript wheel scrolling discarding Ghostty's accelerated burst: each native SGR wheel report now retains the terminal's default three-row discrete delta instead of being reduced to one row when reports arrive within the same burst, and each report opens a display-rate render window so a fast spin paints one frame per report instead of landing as a few large jumps. Measured over a 450 ms gesture of 50 native reports: 14 paints moving a median of 11 rows each before, 49 paints moving a median of 3 rows each after — the smoothness costs ~3.5x the bytes for the duration of the gesture, bounded by the alt-screen per-line diff and the engine's adaptive backpressure.
  
- ## [17.2.15] - 2026-08-12
+ ## [17.3.1] - 2026-08-13
  
 diff --git a/packages/coding-agent/src/modes/components/primary-transcript-fullscreen.ts b/packages/coding-agent/src/modes/components/primary-transcript-fullscreen.ts
 new file mode 100644
@@ -465,10 +465,10 @@ index 0000000000..6ae63a8466
 +	}
 +}
 diff --git a/packages/coding-agent/src/modes/components/transcript-container.ts b/packages/coding-agent/src/modes/components/transcript-container.ts
-index 8e4902c07e..6ab8ea1ff6 100644
+index 32738ef777..b8632482d0 100644
 --- a/packages/coding-agent/src/modes/components/transcript-container.ts
 +++ b/packages/coding-agent/src/modes/components/transcript-container.ts
-@@ -7,6 +7,17 @@ import {
+@@ -8,6 +8,17 @@ import {
  	type ViewportTailProvider,
  } from "@oh-my-pi/pi-tui";
  import { isToolActivityComponent } from "./tool-activity";
@@ -486,7 +486,7 @@ index 8e4902c07e..6ab8ea1ff6 100644
  
  /**
   * A transcript block that is still mutating (a foreground tool awaiting its
-@@ -184,6 +195,8 @@ export class TranscriptContainer
+@@ -201,6 +212,8 @@ export class TranscriptContainer
  	// consumes the report and re-bases the baseline). Out-of-band renders
  	// between engine frames lower it; they can never inflate it.
  	#stableRowsFloor = 0;
@@ -495,7 +495,7 @@ index 8e4902c07e..6ab8ea1ff6 100644
  	override addChild(component: Component): void {
  		if (isToolActivityComponent(component)) component.setToolActivityVisible(this.#toolActivityVisible);
  		super.addChild(component);
-@@ -198,6 +211,39 @@ export class TranscriptContainer
+@@ -215,6 +228,39 @@ export class TranscriptContainer
  		this.invalidate();
  	}
  
@@ -556,10 +556,10 @@ index cddef8d381..9476d3b94e 100644
  		// Paint the magic keywords ("ultrathink"/"orchestrate"/"workflowz") inside the rendered
  		// bubble too — matching the live editor glow. The Markdown component routes code spans and
 diff --git a/packages/coding-agent/src/modes/interactive-mode.ts b/packages/coding-agent/src/modes/interactive-mode.ts
-index 3448f28b6d..9397749512 100644
+index 241d7dc3c7..499f5283e2 100644
 --- a/packages/coding-agent/src/modes/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive-mode.ts
-@@ -163,6 +163,7 @@ import type { HookEditorComponent } from "./components/hook-editor";
+@@ -164,6 +164,7 @@ import type { HookEditorComponent } from "./components/hook-editor";
  import type { HookInputComponent } from "./components/hook-input";
  import type { HookSelectorComponent, HookSelectorSlider } from "./components/hook-selector";
  import { type PlanReviewAnnotationState, PlanReviewOverlay } from "./components/plan-review-overlay";
@@ -567,7 +567,7 @@ index 3448f28b6d..9397749512 100644
  import { StatusLineComponent } from "./components/status-line";
  import type { ToolExecutionHandle } from "./components/tool-execution";
  import { TranscriptContainer } from "./components/transcript-container";
-@@ -634,6 +635,7 @@ export class InteractiveMode implements InteractiveModeContext {
+@@ -650,6 +651,7 @@ export class InteractiveMode implements InteractiveModeContext {
  	#pendingPlanModelSwitch = false;
  	#planModeHasEntered = false;
  	#planReviewOverlay: PlanReviewOverlay | undefined;
@@ -575,7 +575,7 @@ index 3448f28b6d..9397749512 100644
  	#planReviewOverlayHandle: OverlayHandle | undefined;
  	#planReviewCancel: (() => void) | undefined;
  	/** Serializable review annotations keyed by the resolved plan file path. */
-@@ -4334,13 +4336,77 @@ export class InteractiveMode implements InteractiveModeContext {
+@@ -4360,13 +4362,77 @@ export class InteractiveMode implements InteractiveModeContext {
  		this.chatContainer.addChild(item);
  		if (item instanceof ChatBlock) item.mount(this.#chatHost);
  	}
@@ -655,7 +655,7 @@ index 3448f28b6d..9397749512 100644
  		this.#uiHelpers.showStatus(message, options);
  	}
 diff --git a/packages/coding-agent/src/modes/types.ts b/packages/coding-agent/src/modes/types.ts
-index 0fb879efe3..1ca2505ad8 100644
+index baa50154e2..00620596de 100644
 --- a/packages/coding-agent/src/modes/types.ts
 +++ b/packages/coding-agent/src/modes/types.ts
 @@ -266,6 +266,7 @@ export interface InteractiveModeContext {
@@ -1062,13 +1062,13 @@ index 0000000000..3db673131f
 +	});
 +});
 diff --git a/packages/tui/CHANGELOG.md b/packages/tui/CHANGELOG.md
-index bcede4cde6..8efc1fb78a 100644
+index 06f97341dc..0bfab3e265 100644
 --- a/packages/tui/CHANGELOG.md
 +++ b/packages/tui/CHANGELOG.md
-@@ -2,6 +2,16 @@
+@@ -14,6 +14,15 @@
  
- ## [Unreleased]
- 
+ - Fixed an issue where repeated pane-width adjustments or terminal resizing could corrupt native scrollback and soft-wrap behavior.
+ - Fixed an issue where scaled OSC 66 Markdown headings (such as "Large Headings" on Kitty) would render as invisible placeholders or get partially cleared after a redraw or terminal resize.
 +### Added
 +
 +- Fullscreen overlays can opt into a live hardware cursor (`cursor: true` in `OverlayOptions`), so an alternate-screen surface that hosts a text editor shows a real caret instead of the engine keeping it hidden for the whole overlay lifetime.
@@ -1078,15 +1078,14 @@ index bcede4cde6..8efc1fb78a 100644
 +
 +- Fixed alternate-screen overlays rewriting every row on every frame. The alt path now emits a per-line diff, so a live fullscreen surface stops flooding the terminal: over an identical streaming run the same content went from 142 KB to 79 KB and from 35 full-screen repaints to 0. Forced repaints (`resetDisplay()`, `requestRender(true)`) still paint in full, and image rows are always re-emitted because their placement bytes depend on epoch/geometry state that the line text does not capture.
 +- Fixed the shell prompt landing on top of the transcript when the process exits while a cursor-enabled fullscreen overlay is still open: `stop()` tore down the alt buffer without restoring `#hardwareCursorRow`, leaving it holding an absolute alt-screen row while the teardown math reads it as a frame row.
-+
+ 
  ## [17.2.13] - 2026-08-11
  
- ### Fixed
 diff --git a/packages/tui/src/tui.ts b/packages/tui/src/tui.ts
-index 0f5540338d..7f86dfe7b7 100644
+index b4bcdf3763..daedec40a1 100644
 --- a/packages/tui/src/tui.ts
 +++ b/packages/tui/src/tui.ts
-@@ -469,6 +469,12 @@ export interface OverlayOptions {
+@@ -517,6 +517,12 @@ export interface OverlayOptions {
  	 * when native terminal text selection takes precedence over pointer events.
  	 */
  	mouseTracking?: boolean;
@@ -1099,7 +1098,7 @@ index 0f5540338d..7f86dfe7b7 100644
  }
  
  /**
-@@ -948,6 +954,17 @@ export class TUI extends Container {
+@@ -1190,6 +1196,17 @@ export class TUI extends Container {
  	 * feels dead to the user and no longer justifies further CPU savings.
  	 */
  	static readonly #MAX_ADAPTIVE_RENDER_MS = 200;
@@ -1117,7 +1116,7 @@ index 0f5540338d..7f86dfe7b7 100644
  	#inputRenderGraceUntilMs = 0;
  	// Pane-reflow settle window for tmux/screen/zellij. The host process gets
  	// SIGWINCH (and `process.stdout` already reports the new geometry) before
-@@ -1118,12 +1135,22 @@ export class TUI extends Container {
+@@ -1401,12 +1418,22 @@ export class TUI extends Container {
  	// engine paints only the modal on the alt buffer and leaves every
  	// normal-screen accounting field (#previousFrameLength, #viewportTopRow, …)
  	// untouched, so exiting reconciles cleanly against the terminal-restored
@@ -1141,7 +1140,7 @@ index 0f5540338d..7f86dfe7b7 100644
  	// Holds an alternate-screen exit until its replacement full paint can emit it
  	// atomically. It must survive a deferred Ghostty image frame.
  	#pendingAltExit = "";
-@@ -1834,6 +1861,16 @@ export class TUI extends Container {
+@@ -2304,6 +2331,16 @@ export class TUI extends Container {
  			const exitSequence = this.#pendingAltExit || `${mouseExit}${this.#keyboardEnhancementExit()}\x1b[?1049l`;
  			this.terminal.write(exitSequence);
  			setAltScreenActive(false);
@@ -1158,7 +1157,7 @@ index 0f5540338d..7f86dfe7b7 100644
  			this.#altActive = false;
  			this.#altMouseTrackingActive = false;
  			this.#altPreviousLines = [];
-@@ -1959,6 +1996,23 @@ export class TUI extends Container {
+@@ -2432,6 +2469,23 @@ export class TUI extends Container {
  		this.#requestOrdinaryRender();
  	}
  
@@ -1182,7 +1181,7 @@ index 0f5540338d..7f86dfe7b7 100644
  	/**
  	 * Opt `component` into subtree-only renders when input leaves focus stable.
  	 *
-@@ -2376,7 +2430,10 @@ export class TUI extends Container {
+@@ -2855,7 +2909,10 @@ export class TUI extends Container {
  		}
  		const now = this.#renderScheduler.now();
  		const elapsed = now - this.#lastRenderAt;
@@ -1194,7 +1193,7 @@ index 0f5540338d..7f86dfe7b7 100644
  		// Adaptive backpressure — target ~50% render duty cycle: the next frame
  		// starts no sooner than `last_frame_end + last_frame_cost`, i.e.
  		// `last_frame_start + 2 × last_frame_cost`. So `elapsed` (which counts
-@@ -2868,6 +2925,7 @@ export class TUI extends Container {
+@@ -3347,6 +3404,7 @@ export class TUI extends Container {
  		const topOverlay = this.#getTopmostVisibleOverlay();
  		const wantAlt = topOverlay?.options?.fullscreen === true;
  		const wantMouseTracking = wantAlt && topOverlay.options?.mouseTracking !== false;
@@ -1202,10 +1201,10 @@ index 0f5540338d..7f86dfe7b7 100644
  		if (wantAlt && !this.#altActive) {
  			// Enhanced keyboard modes can be buffer-local: re-push the active
  			// modified-key reporting sequence on the freshly entered alternate
-@@ -2884,10 +2942,16 @@ export class TUI extends Container {
- 			this.#altPreviousLines = [];
+@@ -3364,10 +3422,16 @@ export class TUI extends Container {
  			this.#altEnterWidth = width;
  			this.#altEnterHeight = height;
+ 			this.#altWidthEpochBoundary = this.captureNativeScrollbackWidthEpoch();
 +			this.#altEnterHardwareCursorRow = this.#hardwareCursorRow;
  		} else if (!wantAlt && this.#altActive) {
  			const mouseExit = this.#altMouseTrackingActive ? MOUSE_TRACKING_OFF : "";
@@ -1220,7 +1219,7 @@ index 0f5540338d..7f86dfe7b7 100644
  			// Session replacement can finish while a fullscreen selector is still
  			// covering the old normal buffer. Keep the overlay visible until the
  			// replacement is ready, then fuse the buffer restore into that full paint;
-@@ -2897,6 +2961,10 @@ export class TUI extends Container {
+@@ -3377,6 +3441,10 @@ export class TUI extends Container {
  				deferredAltExit = exitSequence;
  			} else this.terminal.write(exitSequence);
  			setAltScreenActive(false);
@@ -1231,7 +1230,7 @@ index 0f5540338d..7f86dfe7b7 100644
  			this.#forgetHardwareCursorState();
  			this.#altActive = false;
  			this.#altMouseTrackingActive = false;
-@@ -2919,7 +2987,7 @@ export class TUI extends Container {
+@@ -3400,7 +3468,7 @@ export class TUI extends Container {
  		}
  		if (this.#altActive) {
  			this.#componentRenderTargets.clear();
@@ -1240,7 +1239,7 @@ index 0f5540338d..7f86dfe7b7 100644
  			return;
  		}
  
-@@ -4005,25 +4073,45 @@ export class TUI extends Container {
+@@ -4961,25 +5029,45 @@ export class TUI extends Container {
  
  	/**
  	 * Compose and paint a single fullscreen overlay frame on the alt buffer.
@@ -1297,7 +1296,7 @@ index 0f5540338d..7f86dfe7b7 100644
  		const fitted: string[] = new Array(height);
  		for (let r = 0; r < height; r++) fitted[r] = lines[r] ?? "";
  		// Flush queued image-data transmits (`a=t`, no visible output) before the
-@@ -4038,31 +4126,114 @@ export class TUI extends Container {
+@@ -4994,31 +5082,114 @@ export class TUI extends Container {
  			for (const seq of imageTransmits) transmitBuffer += seq;
  			this.terminal.write(transmitBuffer);
  		}
@@ -1336,13 +1335,13 @@ index 0f5540338d..7f86dfe7b7 100644
 -		let buffer = `${this.#paintBeginSequence}\x1b[H`;
 -		for (let r = 0; r < height; r++) {
 -			if (r > 0) buffer += "\r\n";
--			buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1);
+-			buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1, this.#osc66SpacerGlyphWidth(fitted, r));
 +		let buffer = this.#paintBeginSequence;
 +		if (fullRepaint) {
 +			buffer += "\x1b[H";
 +			for (let r = 0; r < height; r++) {
 +				if (r > 0) buffer += "\r\n";
-+				buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1);
++				buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1, this.#osc66SpacerGlyphWidth(fitted, r));
 +			}
 +			this.#fullRedrawCount += 1;
 +		} else {
@@ -1359,7 +1358,7 @@ index 0f5540338d..7f86dfe7b7 100644
 +				let first = true;
 +				while (r < height && this.#altRowChanged(fitted[r], previous[r])) {
 +					if (!first) buffer += "\r\n";
-+					buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1);
++					buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1, this.#osc66SpacerGlyphWidth(fitted, r));
 +					first = false;
 +					r++;
 +				}

@@ -1,7 +1,7 @@
-From f0063bd327310a5ae828a54b83aef923a8f5b941 Mon Sep 17 00:00:00 2001
+From faf9851966a49c638c93fd46ebff9dd2ca104e6d Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Thu, 13 Aug 2026 16:29:48 -0300
-Subject: [PATCH 25/25] feat: resolver bun fora do PATH e apontar o update para
+Subject: [PATCH 25/26] feat: resolver bun fora do PATH e apontar o update para
  o agente
 
 Duas falhas que impediam o update de sequer comecar na maquina do autor.
@@ -202,10 +202,10 @@ index 0d5f0897a4..fb888910a9 100644
  	const verification = await deps.verifyBinaryAtPath(artifactPath, release.version);
  	if (!verification.ok) {
 diff --git a/packages/coding-agent/src/modes/utils/ui-helpers.ts b/packages/coding-agent/src/modes/utils/ui-helpers.ts
-index 5d516966c7..70cd500327 100644
+index 2d4661600b..3e9fd34d23 100644
 --- a/packages/coding-agent/src/modes/utils/ui-helpers.ts
 +++ b/packages/coding-agent/src/modes/utils/ui-helpers.ts
-@@ -755,14 +755,15 @@ export class UiHelpers {
+@@ -877,14 +877,15 @@ export class UiHelpers {
  		const block = new TranscriptBlock();
  		block.addChild(new DynamicBorder(text => theme.fg("warning", text)));
  		const title = notice?.title ?? "Update Available";

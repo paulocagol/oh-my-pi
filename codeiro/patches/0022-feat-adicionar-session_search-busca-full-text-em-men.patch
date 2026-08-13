@@ -1,7 +1,7 @@
-From 4ac2ee88f315ebc9a0fb7f1780e2ae059292a1d3 Mon Sep 17 00:00:00 2001
+From a2538b85d87d64bd5c5914e0a9bc71e7f046abe3 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Thu, 13 Aug 2026 08:44:41 -0300
-Subject: [PATCH 22/25] =?UTF-8?q?feat:=20adicionar=20session=5Fsearch,=20b?=
+Subject: [PATCH 22/26] =?UTF-8?q?feat:=20adicionar=20session=5Fsearch,=20b?=
  =?UTF-8?q?usca=20full-text=20em=20mensagens=20de=20sess=C3=B5es=20passada?=
  =?UTF-8?q?s?=
 MIME-Version: 1.0
@@ -60,7 +60,7 @@ hermes-agent (Nous Research); auditoria em
  create mode 100644 packages/coding-agent/test/tools/session-search.test.ts
 
 diff --git a/docs/settings.md b/docs/settings.md
-index 3040822f4e..7df34eba8e 100644
+index 63cc1c3a96..08a53cf9a0 100644
 --- a/docs/settings.md
 +++ b/docs/settings.md
 @@ -504,7 +504,9 @@ tools:
@@ -152,7 +152,7 @@ index 0000000000..d9d5b7ed3b
 +- Search is 100% deterministic BM25; no model is called at any point.
 +- Absence of a hit is not proof the work never happened — the session may predate indexing.
 diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
-index bf5a4201fa..134d259d83 100644
+index f963b01282..1e1f4da8a9 100644
 --- a/packages/coding-agent/CHANGELOG.md
 +++ b/packages/coding-agent/CHANGELOG.md
 @@ -6,6 +6,7 @@
@@ -161,13 +161,13 @@ index bf5a4201fa..134d259d83 100644
  - Added usage telemetry and an automatic lifecycle for auto-learn managed skills. Injecting an `omp-managed` skill into a turn (slash command, ACP, RPC, or autoload) now records a use count and timestamp in `~/.omp/agent/managed-skills/usage.json`; discovery alone never counts, and authored skills are never recorded. When `autolearn.enabled` is on, each top-level session start runs one non-blocking curation pass: a skill is only ever judged on a pass after the one that first observed it, a never-used skill inside the stale window is left alone, and otherwise `lastUsedAt ?? createdAt` older than `autolearn.curator.archiveAfterDays` (default 90) moves the skill to `managed-skills/.archive/` — out of discovery, reversible with one move — while older than `autolearn.curator.staleAfterDays` (default 30) only flags it. Using a stale skill again reactivates it. Passes that change something append one developer message naming what moved.
 +- Added `session_search`, a tool for recalling past conversations from their message content. Session messages are indexed incrementally into a local SQLite FTS5 index as they are persisted, and the tool infers its mode from the arguments given: a `query` ranks matching sessions by BM25 with one hit per session plus surrounding context, a `sessionId` with `aroundEntryId` scrolls a window in either direction from that anchor, a `sessionId` alone returns the session's first and last messages, and no arguments lists recent sessions. No model call is involved on any path. Indexing covers user and assistant messages of persisted sessions from the point the feature is enabled — there is no backfill of prior sessions — and `sessionSearch.enabled` (default `true`) gates both the index and the tool.
  
- ## [17.2.15] - 2026-08-12
+ ## [17.3.1] - 2026-08-13
  
 diff --git a/packages/coding-agent/src/config/settings-schema.ts b/packages/coding-agent/src/config/settings-schema.ts
-index 9c6ceab241..8603248906 100644
+index 56c6214550..b140887c7e 100644
 --- a/packages/coding-agent/src/config/settings-schema.ts
 +++ b/packages/coding-agent/src/config/settings-schema.ts
-@@ -4101,6 +4101,20 @@ export const SETTINGS_SCHEMA = {
+@@ -4092,6 +4092,20 @@ export const SETTINGS_SCHEMA = {
  		},
  	},
  
@@ -207,7 +207,7 @@ index 0000000000..41dfc2c814
 +
 +Indexing covers `user` and `assistant` text only, from the point the index was enabled — an older or tool-only session may be absent. Absence is not proof the work never happened.
 diff --git a/packages/coding-agent/src/session/messages.ts b/packages/coding-agent/src/session/messages.ts
-index acde7698bf..5d6851dcc4 100644
+index 031c25b245..ac5812ab8e 100644
 --- a/packages/coding-agent/src/session/messages.ts
 +++ b/packages/coding-agent/src/session/messages.ts
 @@ -139,7 +139,11 @@ export function didSessionMessagesChange(previousMessages: AgentMessage[], nextM
@@ -224,7 +224,7 @@ index acde7698bf..5d6851dcc4 100644
  	if (!Array.isArray(content)) return "";
  	const parts: string[] = [];
 diff --git a/packages/coding-agent/src/session/session-manager.ts b/packages/coding-agent/src/session/session-manager.ts
-index 127eeae1f3..79f14600be 100644
+index 37a50703d7..8f3ca62377 100644
 --- a/packages/coding-agent/src/session/session-manager.ts
 +++ b/packages/coding-agent/src/session/session-manager.ts
 @@ -18,6 +18,7 @@ import {

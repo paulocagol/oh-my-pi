@@ -1,7 +1,7 @@
-From ac3b2d624bfee7b6536ccbbc74f6a4eb234b7d11 Mon Sep 17 00:00:00 2001
+From 7b2600571ea25d4da1dfb2a643fa3c0f83ab840c Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Thu, 13 Aug 2026 13:56:39 -0300
-Subject: [PATCH 23/25] =?UTF-8?q?fix:=20aviso=20de=20release=20nova=20n?=
+Subject: [PATCH 23/26] =?UTF-8?q?fix:=20aviso=20de=20release=20nova=20n?=
  =?UTF-8?q?=C3=A3o=20manda=20rodar=20update=20que=20falha=20no=20fork?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -108,45 +108,45 @@ index f8dafb1417..4d76b41d10 100644
   * Resolve `patchRef` to a commit on the patch remote.
   *
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 1d56f345cf..b3e885fdbd 100644
+index 5da8f2115b..43b6d5a452 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
 @@ -24,6 +24,7 @@ import {
  import chalk from "@oh-my-pi/pi-utils/chalk";
  import { reset as resetCapabilities } from "./capability";
- import { type Args, reportUnrecognizedFlags } from "./cli/args";
+ import { type Args, reportUnrecognizedFlags, validateToolNames } from "./cli/args";
 +import { buildUpstreamReleaseNotice, describeCodeiroInstall } from "./cli/codeiro-source-update";
  import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
  import { processFileArguments } from "./cli/file-processor";
  import { buildInitialMessage } from "./cli/initial-message";
-@@ -503,13 +504,22 @@ async function runInteractiveMode(
- 	}
+@@ -522,13 +523,22 @@ async function runInteractiveMode(
+ 	// transcript above the fresh one.
+ 	await mode.renderInitialMessages({ preserveExistingChat: true, clearTerminalHistory: true });
+ 	// A resolved version check must not insert its banner into a partial transcript.
+-	checkedVersionPromise.then(newVersion => {
++	checkedVersionPromise.then(async newVersion => {
+ 		if (!settings.get("startup.checkUpdate")) {
+ 			return;
+ 		}
+-		if (newVersion) {
+-			mode.showNewVersionNotification(newVersion);
++		if (!newVersion) {
++			return;
+ 		}
++		// The registry comparison above is distribution-blind. On a fork
++		// install the actionable fact is not "run the updater" but "the
++		// series is not on this tag yet", and both files that say so are
++		// local - so this stays off the network.
++		const identity = await describeCodeiroInstall(process.execPath).catch(() => undefined);
++		mode.showNewVersionNotification(
++			newVersion,
++			identity ? buildUpstreamReleaseNotice(newVersion, identity) : undefined,
++		);
+ 	});
  
- 	versionCheckPromise
--		.then(newVersion => {
-+		.then(async newVersion => {
- 			if (!settings.get("startup.checkUpdate")) {
- 				return;
- 			}
--			if (newVersion) {
--				mode.showNewVersionNotification(newVersion);
-+			if (!newVersion) {
-+				return;
- 			}
-+			// The registry comparison above is distribution-blind. On a fork
-+			// install the actionable fact is not "run the updater" but "the
-+			// series is not on this tag yet", and both files that say so are
-+			// local - so this stays off the network.
-+			const identity = await describeCodeiroInstall(process.execPath).catch(() => undefined);
-+			mode.showNewVersionNotification(
-+				newVersion,
-+				identity ? buildUpstreamReleaseNotice(newVersion, identity) : undefined,
-+			);
- 		})
- 		.catch(() => {});
- 
+ 	for (const notify of notifs) {
 diff --git a/packages/coding-agent/src/modes/interactive-mode.ts b/packages/coding-agent/src/modes/interactive-mode.ts
-index 9397749512..e6b4496b7b 100644
+index 499f5283e2..8471e09883 100644
 --- a/packages/coding-agent/src/modes/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive-mode.ts
 @@ -54,6 +54,7 @@ import {
@@ -157,7 +157,7 @@ index 9397749512..e6b4496b7b 100644
  import type { CollabGuestLink } from "../collab/guest";
  import type { CollabHost } from "../collab/host";
  import { KeybindingsManager } from "../config/keybindings";
-@@ -4600,8 +4601,8 @@ export class InteractiveMode implements InteractiveModeContext {
+@@ -4626,8 +4627,8 @@ export class InteractiveMode implements InteractiveModeContext {
  		this.setWorkingMessage(message);
  	}
  
@@ -169,7 +169,7 @@ index 9397749512..e6b4496b7b 100644
  
  	clearEditor(): void {
 diff --git a/packages/coding-agent/src/modes/types.ts b/packages/coding-agent/src/modes/types.ts
-index 1ca2505ad8..6c329a1d5a 100644
+index 00620596de..58e32d51a5 100644
 --- a/packages/coding-agent/src/modes/types.ts
 +++ b/packages/coding-agent/src/modes/types.ts
 @@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -190,7 +190,7 @@ index 1ca2505ad8..6c329a1d5a 100644
  	updatePendingMessagesDisplay(): void;
  	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void;
 diff --git a/packages/coding-agent/src/modes/utils/ui-helpers.ts b/packages/coding-agent/src/modes/utils/ui-helpers.ts
-index d97d8a41c9..5d516966c7 100644
+index 088fe37e4e..2d4661600b 100644
 --- a/packages/coding-agent/src/modes/utils/ui-helpers.ts
 +++ b/packages/coding-agent/src/modes/utils/ui-helpers.ts
 @@ -3,6 +3,7 @@ import type { AssistantMessage, ImageContent, Message, Usage } from "@oh-my-pi/p
@@ -201,7 +201,7 @@ index d97d8a41c9..5d516966c7 100644
  import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
  import { settings } from "../../config/settings";
  import { getEditClipboard } from "../../edit/edit-clipboard";
-@@ -750,12 +751,14 @@ export class UiHelpers {
+@@ -872,12 +873,14 @@ export class UiHelpers {
  		this.ctx.present(options?.hideWithToolActivity ? new ToolActivityContainer(content) : content);
  	}
  
