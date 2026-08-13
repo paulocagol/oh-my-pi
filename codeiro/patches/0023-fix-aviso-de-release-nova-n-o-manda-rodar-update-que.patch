@@ -1,0 +1,329 @@
+From ac3b2d624bfee7b6536ccbbc74f6a4eb234b7d11 Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Thu, 13 Aug 2026 13:56:39 -0300
+Subject: [PATCH 23/23] =?UTF-8?q?fix:=20aviso=20de=20release=20nova=20n?=
+ =?UTF-8?q?=C3=A3o=20manda=20rodar=20update=20que=20falha=20no=20fork?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+O banner de startup vem da comparação com o registry npm
+(`main.ts:118`), que não sabe qual distribuição está instalada. Num
+install do fork ele dizia "New version 17.3.0 is available. Run: omp
+update" — e esse comando não pode produzir 17.3.0: o backend do fork
+builda a tag `releases/latest` do upstream e aplica a série
+fail-closed, então uma release em que a série não foi rebaseada aborta
+o update.
+
+Medido contra o binário instalado, em palco isolado: `omp update
+--force` chega ao patch 9/22 e para com "does not apply to this
+release" (CHANGELOG.md), rc=1, binário preservado. O usuário via um
+convite para um comando que só falha.
+
+Agora, quando existe `codeiro-omp.json` ao lado do executável, o aviso
+nomeia o que está instalado e o que falta — "Upstream release
+available / 17.3.0 upstream. This install is codeiro-omp <ref> on
+<tag>; rebase the patch series onto the new tag before updating" — sem
+sugerir comando. Install upstream mantém o texto e o comando de
+sempre. `describeCodeiroInstall` só lê manifesto e lock, dois arquivos
+locais: nenhuma rede a mais no boot.
+---
+ .../src/cli/codeiro-source-update.ts          | 60 +++++++++++++
+ packages/coding-agent/src/main.ts             | 16 +++-
+ .../src/modes/interactive-mode.ts             |  5 +-
+ packages/coding-agent/src/modes/types.ts      |  3 +-
+ .../src/modes/utils/ui-helpers.ts             | 11 ++-
+ .../test/codeiro-source-update.test.ts        | 85 +++++++++++++++++++
+ 6 files changed, 170 insertions(+), 10 deletions(-)
+
+diff --git a/packages/coding-agent/src/cli/codeiro-source-update.ts b/packages/coding-agent/src/cli/codeiro-source-update.ts
+index f8dafb1417..4d76b41d10 100644
+--- a/packages/coding-agent/src/cli/codeiro-source-update.ts
++++ b/packages/coding-agent/src/cli/codeiro-source-update.ts
+@@ -824,6 +824,66 @@ async function writeInstallLock(binaryPath: string, lock: CodeiroInstallLock): P
+ 	}
+ }
+ 
++/** What the running install is, when it is a fork install. */
++export interface CodeiroInstallIdentity {
++	/** Ref of the patch series this binary was provisioned with. */
++	readonly patchRef: string;
++	/** Upstream tag the installed artifact was built from, when recorded. */
++	readonly upstreamTag?: string;
++}
++
++/**
++ * Identify the running install without touching the network.
++ *
++ * The startup version check compares the local version against the npm
++ * registry, which knows nothing about this distribution. On a fork install
++ * that comparison is not actionable: `omp update` rebuilds from the upstream
++ * `releases/latest` tag and applies the series fail-closed, so a release the
++ * series was never rebased onto aborts the update. Reading the manifest and
++ * the lock is enough to say so, and both are local files.
++ */
++export async function describeCodeiroInstall(
++	execPath: string | undefined,
++): Promise<CodeiroInstallIdentity | undefined> {
++	let install: CodeiroInstall | undefined;
++	try {
++		install = await loadCodeiroInstall(resolveManifestCandidates(execPath));
++	} catch {
++		// A manifest that does not parse is fatal for an update, but here it
++		// would only cost the notification: fall back to the upstream text.
++		return undefined;
++	}
++	if (!install) return undefined;
++	const lock = await readInstallLock(install.binaryPath);
++	return { patchRef: install.manifest.patchRef, upstreamTag: lock?.upstreamTag };
++}
++
++/** Startup notice text; `command` absent means there is nothing to run. */
++export interface UpstreamReleaseNotice {
++	readonly title: string;
++	readonly body: string;
++	readonly command?: string;
++}
++
++/**
++ * Compose the startup notice for a fork install.
++ *
++ * It deliberately does not suggest `omp update`: on this distribution that
++ * command only produces the new release once the series has been rebased onto
++ * its tag, and suggesting it before that turns a working install into a failed
++ * command the user has to interpret.
++ */
++export function buildUpstreamReleaseNotice(
++	newVersion: string,
++	identity: CodeiroInstallIdentity,
++): UpstreamReleaseNotice {
++	const base = identity.upstreamTag ? ` (${identity.upstreamTag})` : "";
++	return {
++		title: "Upstream release available",
++		body: `${newVersion} upstream. This ${CODEIRO_DISTRIBUTION} install uses series ${identity.patchRef}${base}; rebase it onto the new tag before updating.`,
++	};
++}
++
+ /**
+  * Resolve `patchRef` to a commit on the patch remote.
+  *
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+index 1d56f345cf..b3e885fdbd 100644
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -24,6 +24,7 @@ import {
+ import chalk from "@oh-my-pi/pi-utils/chalk";
+ import { reset as resetCapabilities } from "./capability";
+ import { type Args, reportUnrecognizedFlags } from "./cli/args";
++import { buildUpstreamReleaseNotice, describeCodeiroInstall } from "./cli/codeiro-source-update";
+ import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
+ import { processFileArguments } from "./cli/file-processor";
+ import { buildInitialMessage } from "./cli/initial-message";
+@@ -503,13 +504,22 @@ async function runInteractiveMode(
+ 	}
+ 
+ 	versionCheckPromise
+-		.then(newVersion => {
++		.then(async newVersion => {
+ 			if (!settings.get("startup.checkUpdate")) {
+ 				return;
+ 			}
+-			if (newVersion) {
+-				mode.showNewVersionNotification(newVersion);
++			if (!newVersion) {
++				return;
+ 			}
++			// The registry comparison above is distribution-blind. On a fork
++			// install the actionable fact is not "run the updater" but "the
++			// series is not on this tag yet", and both files that say so are
++			// local - so this stays off the network.
++			const identity = await describeCodeiroInstall(process.execPath).catch(() => undefined);
++			mode.showNewVersionNotification(
++				newVersion,
++				identity ? buildUpstreamReleaseNotice(newVersion, identity) : undefined,
++			);
+ 		})
+ 		.catch(() => {});
+ 
+diff --git a/packages/coding-agent/src/modes/interactive-mode.ts b/packages/coding-agent/src/modes/interactive-mode.ts
+index 9397749512..e6b4496b7b 100644
+--- a/packages/coding-agent/src/modes/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive-mode.ts
+@@ -54,6 +54,7 @@ import {
+ } from "@oh-my-pi/pi-utils";
+ import chalk from "@oh-my-pi/pi-utils/chalk";
+ import { reset as resetCapabilities } from "../capability";
++import type { UpstreamReleaseNotice } from "../cli/codeiro-source-update";
+ import type { CollabGuestLink } from "../collab/guest";
+ import type { CollabHost } from "../collab/host";
+ import { KeybindingsManager } from "../config/keybindings";
+@@ -4600,8 +4601,8 @@ export class InteractiveMode implements InteractiveModeContext {
+ 		this.setWorkingMessage(message);
+ 	}
+ 
+-	showNewVersionNotification(newVersion: string): void {
+-		this.#uiHelpers.showNewVersionNotification(newVersion);
++	showNewVersionNotification(newVersion: string, notice?: UpstreamReleaseNotice): void {
++		this.#uiHelpers.showNewVersionNotification(newVersion, notice);
+ 	}
+ 
+ 	clearEditor(): void {
+diff --git a/packages/coding-agent/src/modes/types.ts b/packages/coding-agent/src/modes/types.ts
+index 1ca2505ad8..6c329a1d5a 100644
+--- a/packages/coding-agent/src/modes/types.ts
++++ b/packages/coding-agent/src/modes/types.ts
+@@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+ import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
+ import type { AssistantMessage, ImageContent, Message, Usage, UsageReport } from "@oh-my-pi/pi-ai";
+ import type { Component, Container, EditorTheme, Loader, Spacer, Text, TUI } from "@oh-my-pi/pi-tui";
++import type { UpstreamReleaseNotice } from "../cli/codeiro-source-update";
+ import type { CollabGuestLink } from "../collab/guest";
+ import type { CollabHost } from "../collab/host";
+ import type { KeybindingsManager } from "../config/keybindings";
+@@ -273,7 +274,7 @@ export interface InteractiveModeContext {
+ 	showPinnedError(message: string): void;
+ 	clearPinnedError(): void;
+ 	showWarning(message: string, options?: { hideWithToolActivity?: boolean }): void;
+-	showNewVersionNotification(newVersion: string): void;
++	showNewVersionNotification(newVersion: string, notice?: UpstreamReleaseNotice): void;
+ 	clearEditor(): void;
+ 	updatePendingMessagesDisplay(): void;
+ 	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void;
+diff --git a/packages/coding-agent/src/modes/utils/ui-helpers.ts b/packages/coding-agent/src/modes/utils/ui-helpers.ts
+index d97d8a41c9..5d516966c7 100644
+--- a/packages/coding-agent/src/modes/utils/ui-helpers.ts
++++ b/packages/coding-agent/src/modes/utils/ui-helpers.ts
+@@ -3,6 +3,7 @@ import type { AssistantMessage, ImageContent, Message, Usage } from "@oh-my-pi/p
+ import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
+ import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
+ import type { AdvisorMessageDetails } from "../../advisor";
++import type { UpstreamReleaseNotice } from "../../cli/codeiro-source-update";
+ import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
+ import { settings } from "../../config/settings";
+ import { getEditClipboard } from "../../edit/edit-clipboard";
+@@ -750,12 +751,14 @@ export class UiHelpers {
+ 		this.ctx.present(options?.hideWithToolActivity ? new ToolActivityContainer(content) : content);
+ 	}
+ 
+-	showNewVersionNotification(newVersion: string): void {
++	showNewVersionNotification(newVersion: string, notice?: UpstreamReleaseNotice): void {
+ 		const block = new TranscriptBlock();
+ 		block.addChild(new DynamicBorder(text => theme.fg("warning", text)));
+-		const title = "Update Available";
+-		const prefix = `New version ${newVersion} is available. Run: `;
+-		const command = "omp update";
++		const title = notice?.title ?? "Update Available";
++		// Upstream suggests a command; a fork install gets the reason instead,
++		// because there the command cannot produce the release yet.
++		const prefix = notice ? notice.body : `New version ${newVersion} is available. Run: `;
++		const command = notice?.command ?? (notice ? "" : "omp update");
+ 		block.addChild(
+ 			new Text(`${title}\n${prefix}${command}`, 1, 0).setStyleFn(
+ 				() =>
+diff --git a/packages/coding-agent/test/codeiro-source-update.test.ts b/packages/coding-agent/test/codeiro-source-update.test.ts
+index 35d2a584bd..fe0109eb1e 100644
+--- a/packages/coding-agent/test/codeiro-source-update.test.ts
++++ b/packages/coding-agent/test/codeiro-source-update.test.ts
+@@ -3,10 +3,12 @@ import * as fs from "node:fs/promises";
+ import * as os from "node:os";
+ import * as path from "node:path";
+ import {
++	buildUpstreamReleaseNotice,
+ 	CODEIRO_LOCK_FILENAME,
+ 	CODEIRO_MANIFEST_FILENAME,
+ 	type CodeiroInstall,
+ 	type CodeiroUpdateDeps,
++	describeCodeiroInstall,
+ 	ensureNativeAddonDirectoryChain,
+ 	loadCodeiroInstall,
+ 	parseCodeiroManifest,
+@@ -610,3 +612,86 @@ describe("runCodeiroSourceUpdate --check", () => {
+ 		await expect(fs.stat(staging)).rejects.toThrow();
+ 	});
+ });
++
++describe("startup notice on a fork install", () => {
++	async function stageInstall(options: { name?: string; lock?: unknown; manifest?: unknown }): Promise<string> {
++		const dir = await makeTempDir();
++		const binaryPath = path.join(dir, options.name ?? "codeiro-omp");
++		await fs.writeFile(binaryPath, "#!/bin/sh\n");
++		if (options.manifest !== null) {
++			await fs.writeFile(
++				path.join(dir, CODEIRO_MANIFEST_FILENAME),
++				JSON.stringify(options.manifest ?? { ...VALID_MANIFEST, patchRef: "codeiro-omp-v17.2.15-c8" }),
++			);
++		}
++		if (options.lock !== undefined) {
++			await fs.writeFile(path.join(dir, CODEIRO_LOCK_FILENAME), JSON.stringify(options.lock));
++		}
++		return binaryPath;
++	}
++
++	it("reads the series ref and the tag the artifact was built from", async () => {
++		const binaryPath = await stageInstall({
++			lock: {
++				version: "17.2.15",
++				upstreamTag: "v17.2.15",
++				patchRef: "codeiro-omp-v17.2.15-c8",
++				patchCommit: "2222222222222222222222222222222222222222",
++				builtAt: "2026-08-13T00:00:00.000Z",
++			},
++		});
++
++		expect(await describeCodeiroInstall(binaryPath)).toEqual({
++			patchRef: "codeiro-omp-v17.2.15-c8",
++			upstreamTag: "v17.2.15",
++		});
++	});
++
++	it("still identifies the install when the lock is absent or corrupt", async () => {
++		const noLock = await stageInstall({});
++		expect(await describeCodeiroInstall(noLock)).toEqual({
++			patchRef: "codeiro-omp-v17.2.15-c8",
++			upstreamTag: undefined,
++		});
++
++		const badLock = await stageInstall({ lock: { version: "17.2.15" } });
++		expect((await describeCodeiroInstall(badLock))?.upstreamTag).toBeUndefined();
++	});
++
++	it("leaves an upstream install to the upstream text", async () => {
++		// No manifest at all, and a manifest next to a foreign executable name:
++		// neither may adopt the fork notice.
++		expect(await describeCodeiroInstall(await stageInstall({ manifest: null }))).toBeUndefined();
++		expect(await describeCodeiroInstall(await stageInstall({ name: "other-tool" }))).toBeUndefined();
++		expect(await describeCodeiroInstall(undefined)).toBeUndefined();
++	});
++
++	it("does not fail the notice over a manifest that does not parse", async () => {
++		const broken = await stageInstall({ manifest: { distribution: "someone-else" } });
++
++		expect(await describeCodeiroInstall(broken)).toBeUndefined();
++	});
++
++	it("names the series instead of suggesting a command that cannot work yet", () => {
++		const notice = buildUpstreamReleaseNotice("17.3.0", {
++			patchRef: "codeiro-omp-v17.2.15-c8",
++			upstreamTag: "v17.2.15",
++		});
++
++		expect(notice.command).toBeUndefined();
++		expect(notice.title).not.toContain("Update Available");
++		expect(notice.body).toContain("17.3.0");
++		expect(notice.body).toContain("codeiro-omp-v17.2.15-c8");
++		expect(notice.body).toContain("(v17.2.15)");
++		expect(notice.body).not.toContain("omp update");
++		// The distribution name must not read as part of the series name.
++		expect(notice.body).not.toContain("codeiro-omp codeiro-omp");
++	});
++
++	it("omits the built-from tag when no lock recorded it", () => {
++		const notice = buildUpstreamReleaseNotice("17.3.0", { patchRef: "codeiro" });
++
++		expect(notice.body).toContain("series codeiro;");
++		expect(notice.body).not.toContain("(");
++	});
++});
+-- 
+2.55.0
+

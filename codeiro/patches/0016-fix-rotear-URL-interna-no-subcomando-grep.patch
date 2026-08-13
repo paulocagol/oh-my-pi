@@ -1,7 +1,7 @@
 From 7a51786636082e7d78d23cd144fdd33f237b91af Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 11:13:45 -0300
-Subject: [PATCH 16/22] fix: rotear URL interna no subcomando grep
+Subject: [PATCH 16/23] fix: rotear URL interna no subcomando grep
 
 O `omp grep` resolvia o path com path.resolve e chamava o grep nativo, entao
 `vitrine.se://` virava o caminho inexistente <cwd>/vitrine.se: e a busca
