@@ -1,7 +1,7 @@
 From fd588731a0d10a883ca975d1278990575ae3fd67 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Tue, 11 Aug 2026 17:33:57 -0300
-Subject: [PATCH 05/24] fix: proteger destino do addon nativo
+Subject: [PATCH 05/25] fix: proteger destino do addon nativo
 
 ---
  .../src/cli/codeiro-source-update.ts          | 44 ++++++++++++++++++-

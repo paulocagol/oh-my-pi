@@ -1,0 +1,349 @@
+From f0063bd327310a5ae828a54b83aef923a8f5b941 Mon Sep 17 00:00:00 2001
+From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
+Date: Thu, 13 Aug 2026 16:29:48 -0300
+Subject: [PATCH 25/25] feat: resolver bun fora do PATH e apontar o update para
+ o agente
+
+Duas falhas que impediam o update de sequer comecar na maquina do autor.
+
+O `requireTools` exigia `bun` no PATH. O binario e standalone, entao quem roda o
+update nao tem razao para manter um `bun` interativo no PATH - aqui ele vem de
+gerenciador de versao, e o update morria antes de tocar um patch. Agora resolve
+na ordem que responde "qual bun a pessoa quis": PATH, $BUN_INSTALL/bin/bun,
+~/.bun/bin/bun, shims do mise e `mise which bun` para o diretorio; o caminho
+aprovado e o mesmo passado a todo processo filho. Sem nenhum, a mensagem diz
+onde procurou e como expor o que existe.
+
+Provado com PATH sem bun: o update chega ao apply e para no conflito real de
+codigo, em vez de falhar no primeiro passo.
+
+O banner e o relatorio de conflito passam a apontar `/omp-update` - o comando do
+agente que rebaseia a serie, resolve o conflito e chama este updater no fim. O
+rebase exige julgamento, que e trabalho, nao passo; a metade mecanica fica aqui,
+onde e fail-closed e reversivel. Sugerir `omp update` cru era instruir a quebrar
+o proprio install.
+---
+ .../src/cli/codeiro-source-update.ts          | 105 +++++++++++++++---
+ .../src/modes/utils/ui-helpers.ts             |   9 +-
+ .../test/codeiro-source-update.test.ts        |  78 ++++++++++++-
+ 3 files changed, 167 insertions(+), 25 deletions(-)
+
+diff --git a/packages/coding-agent/src/cli/codeiro-source-update.ts b/packages/coding-agent/src/cli/codeiro-source-update.ts
+index 0d5f0897a4..fb888910a9 100644
+--- a/packages/coding-agent/src/cli/codeiro-source-update.ts
++++ b/packages/coding-agent/src/cli/codeiro-source-update.ts
+@@ -496,13 +496,63 @@ async function runStreaming(command: string[], cwd: string, env?: NodeJS.Process
+ function git(dir: string, args: string[]): Promise<string> {
+ 	return runChecked(["git", "-c", "advice.detachedHead=false", ...args], dir);
+ }
+-function requireTools(): void {
+-	const missing: string[] = [];
+-	if (!$which("git")) missing.push("git");
+-	if (!$which("bun")) missing.push("bun");
+-	if (missing.length > 0) {
+-		throw new Error(`Source build requires ${missing.join(", ")} on PATH`);
++/**
++ * Places a `bun` good enough to build from source can be, beyond `PATH`.
++ *
++ * The host binary is standalone, so the person running the update has no
++ * reason to keep a `bun` on their interactive `PATH` - on this machine it
++ * lives under a version manager, and the update died on `requireTools`
++ * before touching a single patch. Each candidate is a documented install
++ * location, in the order that answers "which bun did the user mean": the
++ * explicit env var of the official installer, its default prefix, then the
++ * version manager's own answer for this directory.
++ */
++export async function bunCandidates(cwd: string): Promise<string[]> {
++	const found = $which("bun");
++	if (found) return [found];
++
++	const candidates: string[] = [];
++	const bunInstall = $env.BUN_INSTALL;
++	if (bunInstall) candidates.push(path.join(bunInstall, "bin", "bun"));
++	const home = $env.HOME;
++	if (home) {
++		candidates.push(path.join(home, ".bun", "bin", "bun"));
++		candidates.push(path.join(home, ".local", "share", "mise", "shims", "bun"));
+ 	}
++
++	// `mise which` answers for a directory, so it resolves the very toolchain
++	// the source tree pins - but only when the config is trusted, which is why
++	// the plain shim above is asked for too.
++	if ($which("mise")) {
++		const resolved = await runQuiet(["mise", "which", "bun"], cwd);
++		if (resolved.exitCode === 0) {
++			const line = resolved.stdout.trim();
++			if (line) candidates.push(line);
++		}
++	}
++	return candidates;
++}
++
++/**
++ * Resolve the toolchain the source build needs, or explain what is missing.
++ *
++ * Returns the `bun` to invoke: an absolute path when it came from outside
++ * `PATH`, so every child process gets the same one this check approved.
++ */
++export async function requireTools(cwd: string): Promise<string> {
++	if (!$which("git")) throw new Error("Source build requires git on PATH");
++
++	const candidates = await bunCandidates(cwd);
++	for (const candidate of candidates) {
++		if (candidate === "bun" || fs.existsSync(candidate)) return candidate;
++	}
++	throw new Error(
++		[
++			"Source build requires bun, which is not on PATH.",
++			"  Looked for: PATH, $BUN_INSTALL/bin/bun, ~/.bun/bin/bun, mise shims, `mise which bun`.",
++			"  Install it (https://bun.sh) or expose the one you have, e.g. `mise exec bun -- omp update`.",
++		].join("\n"),
++	);
+ }
+ 
+ /**
+@@ -846,6 +896,16 @@ export async function applyPatchSeries(
+ /** Recipe an agent follows to rebase the series onto a new upstream tag. */
+ export const REBASE_RECIPE_PATH = "codeiro/docs/rebase-da-serie.md";
+ 
++/**
++ * Slash command that carries out the whole cycle from inside the agent.
++ *
++ * A rebase needs judgement - reading two versions of a hunk and deciding what
++ * the fork meant - which is work, not a step. This command owns that work and
++ * calls this very updater at the end, so the mechanical half stays here where
++ * it is fail-closed and reversible.
++ */
++export const SERIES_REBASE_COMMAND = "/omp-update";
++
+ /** What a conflict report needs beyond the conflict itself. */
+ export interface SeriesConflictContext {
+ 	/** Patches that applied before the conflict. */
+@@ -898,7 +958,8 @@ export function formatSeriesConflictReport(conflict: PatchConflict, context: Ser
+ 		`${theme.status.error} Update not applied`,
+ 		`  Reason: ${reason}`,
+ 		`  Recipe: ${REBASE_RECIPE_PATH}`,
+-		"  Re-running the update cannot change this; the series has to be rebased first.",
++		`  Next: ${SERIES_REBASE_COMMAND} inside the agent - it rebases the series, resolves this, and runs the update.`,
++		"  Re-running this command cannot change the outcome; the series has to be rebased first.",
+ 	);
+ 	return lines.join("\n");
+ }
+@@ -919,16 +980,21 @@ export class CodeiroUpdateAborted extends Error {}
+  * platform native leaf) before delegating to the release build for the single
+  * target that matches this host.
+  */
+-async function buildFromSource(sourceDir: string, target: SourceBuildTarget, version: string): Promise<string> {
++async function buildFromSource(
++	sourceDir: string,
++	target: SourceBuildTarget,
++	version: string,
++	bun: string,
++): Promise<string> {
+ 	console.log(chalk.dim("Installing frozen dependencies…"));
+-	await runStreaming(["bun", "install", "--frozen-lockfile"], sourceDir);
++	await runStreaming([bun, "install", "--frozen-lockfile"], sourceDir);
+ 
+ 	console.log(chalk.dim(`Installing native addon ${version}…`));
+ 	await installPublishedNativeAddon(sourceDir, target, version);
+ 
+ 	const preservedOutputDir = path.join(sourceDir, ".codeiro-build-output");
+ 	console.log(chalk.dim(`Building ${APP_NAME} for ${target.id}…`));
+-	await runStreaming(["bun", "scripts/ci-release-build-binaries.ts", "--targets", target.id], sourceDir, {
++	await runStreaming([bun, "scripts/ci-release-build-binaries.ts", "--targets", target.id], sourceDir, {
+ 		...Bun.env,
+ 		OMP_BUILD_OUTPUT_DIR: preservedOutputDir,
+ 	});
+@@ -1089,10 +1155,12 @@ export interface UpstreamReleaseNotice {
+ /**
+  * Compose the startup notice for a fork install.
+  *
+- * It deliberately does not suggest `omp update`: on this distribution that
+- * command only produces the new release once the series has been rebased onto
+- * its tag, and suggesting it before that turns a working install into a failed
+- * command the user has to interpret.
++ * It deliberately does not suggest the bare `omp update`: on this distribution
++ * that command only produces the new release once the series has been rebased
++ * onto its tag, and suggesting it before that turns a working install into a
++ * failed command the user has to interpret. What it suggests instead is the
++ * agent command that owns the rebase and then runs the update itself, which is
++ * the only path that can actually end in a new binary.
+  */
+ export function buildUpstreamReleaseNotice(
+ 	newVersion: string,
+@@ -1101,7 +1169,8 @@ export function buildUpstreamReleaseNotice(
+ 	const base = identity.upstreamTag ? ` (${identity.upstreamTag})` : "";
+ 	return {
+ 		title: "Upstream release available",
+-		body: `${newVersion} upstream. This ${CODEIRO_DISTRIBUTION} install uses series ${identity.patchRef}${base}; rebase it onto the new tag before updating.`,
++		body: `${newVersion} upstream. This ${CODEIRO_DISTRIBUTION} install uses series ${identity.patchRef}${base}, which has to be rebased onto the new tag first.`,
++		command: SERIES_REBASE_COMMAND,
+ 	};
+ }
+ 
+@@ -1198,7 +1267,9 @@ export async function runCodeiroSourceUpdate(options: {
+ 
+ 	const target = resolveSourceBuildTarget(process.platform, process.arch, deps.isMuslLinux());
+ 	const staging = resolveStagingLayout(manifest.sourceRoot, install.binaryPath);
+-	requireTools();
++	// Before the staging tree exists, so a missing toolchain fails fast; the
++	// user's own directory is what resolves their version manager.
++	const bun = await requireTools(process.cwd());
+ 
+ 	await fs.promises.mkdir(staging.root, { recursive: true });
+ 
+@@ -1238,7 +1309,7 @@ export async function runCodeiroSourceUpdate(options: {
+ 		);
+ 	}
+ 
+-	const artifactPath = await buildFromSource(staging.sourceDir, target, release.version);
++	const artifactPath = await buildFromSource(staging.sourceDir, target, release.version, bun);
+ 
+ 	const verification = await deps.verifyBinaryAtPath(artifactPath, release.version);
+ 	if (!verification.ok) {
+diff --git a/packages/coding-agent/src/modes/utils/ui-helpers.ts b/packages/coding-agent/src/modes/utils/ui-helpers.ts
+index 5d516966c7..70cd500327 100644
+--- a/packages/coding-agent/src/modes/utils/ui-helpers.ts
++++ b/packages/coding-agent/src/modes/utils/ui-helpers.ts
+@@ -755,14 +755,15 @@ export class UiHelpers {
+ 		const block = new TranscriptBlock();
+ 		block.addChild(new DynamicBorder(text => theme.fg("warning", text)));
+ 		const title = notice?.title ?? "Update Available";
+-		// Upstream suggests a command; a fork install gets the reason instead,
+-		// because there the command cannot produce the release yet.
++		// Upstream ends its sentence with "Run: " and lets the command finish the
++		// line; a fork notice is a full sentence, so the two need a separator.
+ 		const prefix = notice ? notice.body : `New version ${newVersion} is available. Run: `;
+ 		const command = notice?.command ?? (notice ? "" : "omp update");
++		const separator = command && prefix && !prefix.endsWith(" ") ? " " : "";
+ 		block.addChild(
+-			new Text(`${title}\n${prefix}${command}`, 1, 0).setStyleFn(
++			new Text(`${title}\n${prefix}${separator}${command}`, 1, 0).setStyleFn(
+ 				() =>
+-					`${theme.bold(theme.fg("warning", title))}\n${theme.fg("muted", prefix)}${theme.fg("accent", command)}`,
++					`${theme.bold(theme.fg("warning", title))}\n${theme.fg("muted", prefix)}${separator}${theme.fg("accent", command)}`,
+ 			),
+ 		);
+ 		block.addChild(new DynamicBorder(text => theme.fg("warning", text)));
+diff --git a/packages/coding-agent/test/codeiro-source-update.test.ts b/packages/coding-agent/test/codeiro-source-update.test.ts
+index 41ca758a88..616176ee47 100644
+--- a/packages/coding-agent/test/codeiro-source-update.test.ts
++++ b/packages/coding-agent/test/codeiro-source-update.test.ts
+@@ -20,6 +20,7 @@ import {
+ 	parsePatchSeries,
+ 	parsePatchSeriesBase,
+ 	replaceNativeAddonFile,
++	requireTools,
+ 	resolveLatestStableRelease,
+ 	resolveManifestCandidates,
+ 	resolvePatchSeries,
+@@ -45,6 +46,29 @@ async function makeTempDir(): Promise<string> {
+ 	return dir;
+ }
+ 
++/**
++ * Run with a replaced environment, restoring it afterwards.
++ *
++ * `$which` reads the live `PATH`, so proving the fallbacks requires actually
++ * changing it rather than stubbing a lookup - the point is the real resolution
++ * order, not a mock of it.
++ */
++async function withEnv<T>(env: Record<string, string | undefined>, body: () => Promise<T>): Promise<T> {
++	const saved = { ...process.env };
++	for (const [key, value] of Object.entries(env)) {
++		if (value === undefined) delete process.env[key];
++		else process.env[key] = value;
++	}
++	try {
++		return await body();
++	} finally {
++		for (const key of Object.keys(process.env)) {
++			if (!(key in saved)) delete process.env[key];
++		}
++		Object.assign(process.env, saved);
++	}
++}
++
+ afterEach(async () => {
+ 	vi.restoreAllMocks();
+ 	await Promise.all(tempDirs.splice(0).map(dir => removeWithRetries(dir)));
+@@ -935,18 +959,20 @@ describe("startup notice on a fork install", () => {
+ 		expect(await describeCodeiroInstall(broken)).toBeUndefined();
+ 	});
+ 
+-	it("names the series instead of suggesting a command that cannot work yet", () => {
++	it("points at the agent command that can actually produce the release", () => {
+ 		const notice = buildUpstreamReleaseNotice("17.3.0", {
+ 			patchRef: "codeiro-omp-v17.2.15-c8",
+ 			upstreamTag: "v17.2.15",
+ 		});
+ 
+-		expect(notice.command).toBeUndefined();
++		// The bare updater cannot produce this release until the series moves,
++		// so the suggestion has to be the command that rebases it first.
++		expect(notice.command).toBe("/omp-update");
+ 		expect(notice.title).not.toContain("Update Available");
+ 		expect(notice.body).toContain("17.3.0");
+ 		expect(notice.body).toContain("codeiro-omp-v17.2.15-c8");
+ 		expect(notice.body).toContain("(v17.2.15)");
+-		expect(notice.body).not.toContain("omp update");
++		expect(notice.body).toContain("rebased");
+ 		// The distribution name must not read as part of the series name.
+ 		expect(notice.body).not.toContain("codeiro-omp codeiro-omp");
+ 	});
+@@ -954,7 +980,51 @@ describe("startup notice on a fork install", () => {
+ 	it("omits the built-from tag when no lock recorded it", () => {
+ 		const notice = buildUpstreamReleaseNotice("17.3.0", { patchRef: "codeiro" });
+ 
+-		expect(notice.body).toContain("series codeiro;");
++		expect(notice.body).toContain("series codeiro,");
+ 		expect(notice.body).not.toContain("(");
+ 	});
+ });
++
++describe("requireTools", () => {
++	/**
++	 * A PATH that carries git but no bun - the shape of an interactive shell on
++	 * a machine whose bun comes from a version manager, which is exactly where
++	 * the update used to die before touching a patch.
++	 */
++	async function gitOnlyPath(): Promise<string> {
++		const dir = await makeTempDir();
++		const git = Bun.which("git");
++		if (!git) throw new Error("this test needs git on PATH");
++		await fs.symlink(git, path.join(dir, "git"));
++		return dir;
++	}
++
++	it("uses the bun on PATH when there is one", async () => {
++		const resolved = await requireTools(process.cwd());
++
++		expect(resolved).toContain("bun");
++	});
++
++	it("finds the bun of the official installer prefix when PATH has none", async () => {
++		const binDir = await gitOnlyPath();
++		const prefix = await makeTempDir();
++		await fs.mkdir(path.join(prefix, "bin"), { recursive: true });
++		const bun = path.join(prefix, "bin", "bun");
++		await fs.writeFile(bun, "#!/bin/sh\n", { mode: 0o755 });
++		const env = { ...process.env, PATH: binDir, BUN_INSTALL: prefix, HOME: await makeTempDir() };
++
++		const resolved = await withEnv(env, () => requireTools(process.cwd()));
++
++		expect(resolved).toBe(bun);
++	});
++
++	it("explains where it looked and how to expose bun when nothing has one", async () => {
++		const binDir = await gitOnlyPath();
++		const env = { ...process.env, PATH: binDir, BUN_INSTALL: undefined, HOME: await makeTempDir() };
++
++		const failure = await withEnv(env, () => requireTools(process.cwd()).catch((err: unknown) => err));
++
++		expect(String(failure)).toContain("mise exec bun -- omp update");
++		expect(String(failure)).toContain("$BUN_INSTALL/bin/bun");
++	});
++});
+-- 
+2.55.0
+

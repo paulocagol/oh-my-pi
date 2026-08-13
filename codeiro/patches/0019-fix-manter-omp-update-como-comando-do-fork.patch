@@ -1,7 +1,7 @@
 From b8fe2b1a64036ed5f782c22afb741faf6bbb1f5f Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 15:33:09 -0300
-Subject: [PATCH 19/24] fix: manter omp update como comando do fork
+Subject: [PATCH 19/25] fix: manter omp update como comando do fork
 
 ---
  packages/coding-agent/src/cli/update-cli.ts | 2 +-

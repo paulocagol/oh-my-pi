@@ -1,7 +1,7 @@
 From fce9918973ffa2c34a80f7fdc199f26203191e4d Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Thu, 13 Aug 2026 15:44:25 -0300
-Subject: [PATCH 24/24] feat: curar drift do apply e entregar veredito
+Subject: [PATCH 24/25] feat: curar drift do apply e entregar veredito
  acionavel no update
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
