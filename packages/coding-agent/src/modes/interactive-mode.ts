@@ -54,6 +54,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "../capability";
+import type { UpstreamReleaseNotice } from "../cli/codeiro-source-update";
 import type { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "../config/keybindings";
@@ -4600,8 +4601,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.setWorkingMessage(message);
 	}
 
-	showNewVersionNotification(newVersion: string): void {
-		this.#uiHelpers.showNewVersionNotification(newVersion);
+	showNewVersionNotification(newVersion: string, notice?: UpstreamReleaseNotice): void {
+		this.#uiHelpers.showNewVersionNotification(newVersion, notice);
 	}
 
 	clearEditor(): void {

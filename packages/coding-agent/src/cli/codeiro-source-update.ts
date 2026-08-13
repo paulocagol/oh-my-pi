@@ -824,6 +824,66 @@ async function writeInstallLock(binaryPath: string, lock: CodeiroInstallLock): P
 	}
 }
 
+/** What the running install is, when it is a fork install. */
+export interface CodeiroInstallIdentity {
+	/** Ref of the patch series this binary was provisioned with. */
+	readonly patchRef: string;
+	/** Upstream tag the installed artifact was built from, when recorded. */
+	readonly upstreamTag?: string;
+}
+
+/**
+ * Identify the running install without touching the network.
+ *
+ * The startup version check compares the local version against the npm
+ * registry, which knows nothing about this distribution. On a fork install
+ * that comparison is not actionable: `omp update` rebuilds from the upstream
+ * `releases/latest` tag and applies the series fail-closed, so a release the
+ * series was never rebased onto aborts the update. Reading the manifest and
+ * the lock is enough to say so, and both are local files.
+ */
+export async function describeCodeiroInstall(
+	execPath: string | undefined,
+): Promise<CodeiroInstallIdentity | undefined> {
+	let install: CodeiroInstall | undefined;
+	try {
+		install = await loadCodeiroInstall(resolveManifestCandidates(execPath));
+	} catch {
+		// A manifest that does not parse is fatal for an update, but here it
+		// would only cost the notification: fall back to the upstream text.
+		return undefined;
+	}
+	if (!install) return undefined;
+	const lock = await readInstallLock(install.binaryPath);
+	return { patchRef: install.manifest.patchRef, upstreamTag: lock?.upstreamTag };
+}
+
+/** Startup notice text; `command` absent means there is nothing to run. */
+export interface UpstreamReleaseNotice {
+	readonly title: string;
+	readonly body: string;
+	readonly command?: string;
+}
+
+/**
+ * Compose the startup notice for a fork install.
+ *
+ * It deliberately does not suggest `omp update`: on this distribution that
+ * command only produces the new release once the series has been rebased onto
+ * its tag, and suggesting it before that turns a working install into a failed
+ * command the user has to interpret.
+ */
+export function buildUpstreamReleaseNotice(
+	newVersion: string,
+	identity: CodeiroInstallIdentity,
+): UpstreamReleaseNotice {
+	const base = identity.upstreamTag ? ` (${identity.upstreamTag})` : "";
+	return {
+		title: "Upstream release available",
+		body: `${newVersion} upstream. This ${CODEIRO_DISTRIBUTION} install uses series ${identity.patchRef}${base}; rebase it onto the new tag before updating.`,
+	};
+}
+
 /**
  * Resolve `patchRef` to a commit on the patch remote.
  *
