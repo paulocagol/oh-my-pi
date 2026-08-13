@@ -7,6 +7,13 @@ do checkout deste repositório, `git`, `bun` ≥1.3.14 (`packages/coding-agent/p
 e, se `packages/natives` mudar, um toolchain Rust para o `build` do addon
 nativo (`packages/natives/README.md:46`).
 
+Dentro do agente, o executor desta receita é o comando `/omp-update`: ele faz o
+diagnóstico, tenta o caminho curto, rebaseia a série resolvendo cada conflito,
+publica série e tag, e chama o próprio `omp update` para instalar. O banner de
+release nova e o relatório de conflito apontam para ele, porque `omp update` cru
+não pode produzir a release antes do rebase. Esta doc é o procedimento; o comando
+é quem o executa.
+
 ## 1. Quando usar
 
 Dois gatilhos, ambos legítimos:
