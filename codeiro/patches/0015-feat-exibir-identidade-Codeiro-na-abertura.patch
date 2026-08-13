@@ -1,7 +1,7 @@
 From a40d08cfa2e8a4d73b254634da71a2770ac7e782 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Wed, 12 Aug 2026 09:23:43 -0300
-Subject: [PATCH 15/24] feat: exibir identidade Codeiro na abertura
+Subject: [PATCH 15/25] feat: exibir identidade Codeiro na abertura
 
 ---
  packages/coding-agent/src/modes/components/welcome.ts      | 3 +--

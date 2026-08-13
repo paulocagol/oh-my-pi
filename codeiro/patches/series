@@ -23,3 +23,4 @@
 0022-feat-adicionar-session_search-busca-full-text-em-men.patch
 0023-fix-aviso-de-release-nova-n-o-manda-rodar-update-que.patch
 0024-feat-curar-drift-do-apply-e-entregar-veredito-aciona.patch
+0025-feat-resolver-bun-fora-do-PATH-e-apontar-o-update-pa.patch

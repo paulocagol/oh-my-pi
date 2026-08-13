@@ -1,7 +1,7 @@
 From a2c28604e3c5c61a2c72f5219b82c5efdf1e1f53 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Thu, 13 Aug 2026 08:44:00 -0300
-Subject: [PATCH 21/24] feat: adicionar telemetria de uso e curator de ciclo de
+Subject: [PATCH 21/25] feat: adicionar telemetria de uso e curator de ciclo de
  vida para skills do autolearn
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

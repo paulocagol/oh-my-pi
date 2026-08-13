@@ -1,7 +1,7 @@
 From 4ac2ee88f315ebc9a0fb7f1780e2ae059292a1d3 Mon Sep 17 00:00:00 2001
 From: "Paulo J. Cagol" <paulojosecagol@gmail.com>
 Date: Thu, 13 Aug 2026 08:44:41 -0300
-Subject: [PATCH 22/24] =?UTF-8?q?feat:=20adicionar=20session=5Fsearch,=20b?=
+Subject: [PATCH 22/25] =?UTF-8?q?feat:=20adicionar=20session=5Fsearch,=20b?=
  =?UTF-8?q?usca=20full-text=20em=20mensagens=20de=20sess=C3=B5es=20passada?=
  =?UTF-8?q?s?=
 MIME-Version: 1.0
