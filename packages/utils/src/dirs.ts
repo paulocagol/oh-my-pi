@@ -758,6 +758,11 @@ export function getHistoryDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "history.db", "data");
 }
 
+/** Get the path to session-search.db (SQLite FTS index over past session message content). */
+export function getSessionSearchDbPath(agentDir?: string): string {
+	return dirs.agentSubdir(agentDir, "session-search.db", "data");
+}
+
 /** Get the path to models.db (model cache database). */
 export function getModelDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "models.db", "data");

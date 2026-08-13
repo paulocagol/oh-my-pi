@@ -4101,6 +4101,20 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	// Gates both halves of past-conversation recall: the incremental index
+	// written by SessionManager.appendMessage and the session_search tool that
+	// reads it. Not under `tools.*` because turning it off also stops indexing.
+	"sessionSearch.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Session Message Search",
+			description: "Index message content for the session_search tool (past-conversation recall)",
+		},
+	},
+
 	"ask.enabled": {
 		type: "boolean",
 		default: true,
